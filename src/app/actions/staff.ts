@@ -1979,6 +1979,76 @@ export async function toggleStaffActive(targetStaffId: number) {
   return { success: true };
 }
 
+export async function adminResetStaffPassword(targetStaffId: number, newPassword: string) {
+  const session = await requireRole(["Admin"]);
+
+  if (!Number.isInteger(targetStaffId) || targetStaffId <= 0) {
+    return { success: false, error: "Invalid target staff ID." };
+  }
+
+  if (targetStaffId === 1) {
+    return { success: false, error: "System Gateway account cannot be modified." };
+  }
+
+  // Strong password policy: 12-128 chars, uppercase, lowercase, digit, special character
+  if (!newPassword || typeof newPassword !== "string") {
+    return { success: false, error: "Password is required." };
+  }
+
+  if (newPassword.length < 12) {
+    return { success: false, error: "Password must be at least 12 characters long." };
+  }
+
+  if (newPassword.length > 128) {
+    return { success: false, error: "Password cannot exceed 128 characters." };
+  }
+
+  const hasUpper = /[A-Z]/.test(newPassword);
+  const hasLower = /[a-z]/.test(newPassword);
+  const hasDigit = /[0-9]/.test(newPassword);
+  const hasSpecial = /[^A-Za-z0-9]/.test(newPassword);
+
+  if (!hasUpper || !hasLower || !hasDigit || !hasSpecial) {
+    return {
+      success: false,
+      error: "Password must contain at least one uppercase letter, one lowercase letter, one number, and one special character.",
+    };
+  }
+
+  const target = await prisma.staff.findUnique({
+    where: { staff_id: targetStaffId },
+    include: { roles: true },
+  });
+
+  if (!target) {
+    return { success: false, error: "Staff member not found." };
+  }
+
+  if (!target.is_active) {
+    return {
+      success: false,
+      error: "Cannot reset password for a deactivated account. Please activate the account first.",
+    };
+  }
+
+  const passwordHash = await argon2.hash(newPassword, { type: argon2.argon2id });
+
+  await prisma.staff.update({
+    where: { staff_id: targetStaffId },
+    data: { password_hash: passwordHash },
+  });
+
+  logActivity(
+    session.full_name,
+    "Admin",
+    "Staff Password Reset",
+    `Reset password for staff account #${targetStaffId} (@${target.username}, role: ${target.roles.role_name}).`
+  );
+
+  revalidatePath("/staff/dashboard/staff");
+  return { success: true };
+}
+
 // ─── Activity Log & Notifications ───────────────────────────────────────────
 
 export async function getActivityHistory() {

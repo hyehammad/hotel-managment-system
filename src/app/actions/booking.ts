@@ -3,6 +3,7 @@
 import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
 import { addNotification } from "@/lib/events";
+import { canonicalizePhone } from "@/lib/phone";
 
 export interface BookingInput {
   roomTypeId: number;
@@ -156,8 +157,14 @@ export async function submitGuestBooking(input: BookingInput): Promise<BookingRe
       const estimatedTotal = ratePerNight * totalNights;
 
       // Step B: Find or create guest record
+      const canonicalGuestPhone = canonicalizePhone(phone) || phone.trim();
       let guest = await tx.guests.findFirst({
-        where: { phone },
+        where: {
+          OR: [
+            { phone: canonicalGuestPhone },
+            { phone: phone.trim() },
+          ],
+        },
       });
 
       if (!guest) {
@@ -166,7 +173,7 @@ export async function submitGuestBooking(input: BookingInput): Promise<BookingRe
             first_name: firstName.trim(),
             last_name: lastName.trim(),
             email: email ? email.trim() : null,
-            phone: phone.trim(),
+            phone: canonicalGuestPhone,
             gender: gender || null,
             nationality: nationality || null,
           },
@@ -322,11 +329,22 @@ export async function lookupGuestBooking(referenceInput: string, contactInput: s
       return { success: false, message: "No reservation found matching this reference." };
     }
 
-    // Verify contact info matches guest record
-    const guestEmail = (reservation.guests.email || "").toLowerCase();
-    const guestPhone = (reservation.guests.phone || "").toLowerCase();
+    // Verify contact info matches guest record (strict exact canonical or exact email match)
+    const guestEmail = (reservation.guests.email || "").toLowerCase().trim();
+    const guestPhoneCanonical = canonicalizePhone(reservation.guests.phone || "");
 
-    if (!cleanContact || (!guestEmail.includes(cleanContact) && !guestPhone.includes(cleanContact))) {
+    const inputClean = cleanContact.trim();
+    const inputEmail = inputClean.toLowerCase();
+    const inputPhoneCanonical = canonicalizePhone(inputClean);
+
+    const isEmailInput = inputClean.includes("@");
+    const emailMatches = isEmailInput && guestEmail.length > 0 && guestEmail === inputEmail;
+    const phoneMatches =
+      guestPhoneCanonical.length > 0 &&
+      inputPhoneCanonical.length > 0 &&
+      guestPhoneCanonical === inputPhoneCanonical;
+
+    if (!emailMatches && !phoneMatches) {
       return { success: false, message: "The email or phone provided does not match the reservation record." };
     }
 

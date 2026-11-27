@@ -1,7 +1,12 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { toggleStaffActive, createStaffAccount } from "@/app/actions/staff";
+import { useRouter } from "next/navigation";
+import {
+  toggleStaffActive,
+  createStaffAccount,
+  adminResetStaffPassword,
+} from "@/app/actions/staff";
 import {
   Users,
   Shield,
@@ -17,6 +22,10 @@ import {
   Wrench,
   Sparkles,
   KeyRound,
+  Eye,
+  EyeOff,
+  Lock,
+  AlertCircle,
 } from "lucide-react";
 
 interface StaffItem {
@@ -52,11 +61,87 @@ export default function StaffClient({
   const [members, setMembers] = useState(staffList);
   const [isPending, startTransition] = useTransition();
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const router = useRouter();
 
   // Create Staff Modal
   const [createModalOpen, setCreateModalOpen] = useState(false);
 
+  // Reset Password Modal
+  const [resetModalStaff, setResetModalStaff] = useState<StaffItem | null>(null);
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [resetError, setResetError] = useState<string | null>(null);
+
   const isAdmin = currentUserRole.toLowerCase() === "admin";
+
+  const handleOpenResetModal = (staff: StaffItem) => {
+    setResetModalStaff(staff);
+    setNewPassword("");
+    setConfirmPassword("");
+    setShowNewPassword(false);
+    setShowConfirmPassword(false);
+    setResetError(null);
+  };
+
+  const handleCloseResetModal = () => {
+    setResetModalStaff(null);
+    setNewPassword("");
+    setConfirmPassword("");
+    setShowNewPassword(false);
+    setShowConfirmPassword(false);
+    setResetError(null);
+  };
+
+  const handleResetPassword = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!resetModalStaff) return;
+    setResetError(null);
+
+    if (newPassword.length < 12) {
+      setResetError("Password must be at least 12 characters long.");
+      return;
+    }
+    if (newPassword.length > 128) {
+      setResetError("Password cannot exceed 128 characters.");
+      return;
+    }
+    if (!/[A-Z]/.test(newPassword)) {
+      setResetError("Password must contain at least one uppercase letter (A-Z).");
+      return;
+    }
+    if (!/[a-z]/.test(newPassword)) {
+      setResetError("Password must contain at least one lowercase letter (a-z).");
+      return;
+    }
+    if (!/[0-9]/.test(newPassword)) {
+      setResetError("Password must contain at least one number (0-9).");
+      return;
+    }
+    if (!/[^A-Za-z0-9]/.test(newPassword)) {
+      setResetError("Password must contain at least one special character.");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setResetError("Passwords do not match. Please verify confirmation.");
+      return;
+    }
+
+    startTransition(async () => {
+      const res = await adminResetStaffPassword(resetModalStaff.staff_id, newPassword);
+      if (res.success) {
+        setMessage({
+          type: "success",
+          text: `Password for ${resetModalStaff.full_name} (@${resetModalStaff.username}) was reset successfully.`,
+        });
+        handleCloseResetModal();
+        router.refresh();
+      } else {
+        setResetError(res.error || "Failed to reset password.");
+      }
+    });
+  };
 
   const handleToggle = (staffId: number, currentStatus: boolean) => {
     setMessage(null);
@@ -244,17 +329,30 @@ export default function StaffClient({
                             System Lock
                           </span>
                         ) : (
-                          <button
-                            onClick={() => handleToggle(s.staff_id, s.is_active)}
-                            disabled={isPending}
-                            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer disabled:opacity-50 ${
-                              s.is_active
-                                ? "bg-slate-800 hover:bg-red-500/20 text-slate-300 hover:text-red-400 border border-slate-700 hover:border-red-500/30"
-                                : "bg-emerald-500 hover:bg-emerald-600 text-slate-950"
-                            }`}
-                          >
-                            {s.is_active ? "Deactivate" : "Activate"}
-                          </button>
+                          <div className="flex items-center justify-end gap-2">
+                            {s.is_active && (
+                              <button
+                                onClick={() => handleOpenResetModal(s)}
+                                disabled={isPending}
+                                className="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 transition cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
+                                title={`Reset password for @${s.username}`}
+                              >
+                                <KeyRound className="w-3 h-3" />
+                                Reset Password
+                              </button>
+                            )}
+                            <button
+                              onClick={() => handleToggle(s.staff_id, s.is_active)}
+                              disabled={isPending}
+                              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer disabled:opacity-50 ${
+                                s.is_active
+                                  ? "bg-slate-800 hover:bg-red-500/20 text-slate-300 hover:text-red-400 border border-slate-700 hover:border-red-500/30"
+                                  : "bg-emerald-500 hover:bg-emerald-600 text-slate-950"
+                              }`}
+                            >
+                              {s.is_active ? "Deactivate" : "Activate"}
+                            </button>
+                          </div>
                         )}
                       </td>
                     )}
@@ -389,6 +487,139 @@ export default function StaffClient({
                   className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-slate-950 text-xs font-semibold transition cursor-pointer flex items-center gap-1.5"
                 >
                   {isPending ? "Creating Account..." : "Create Account"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Reset Staff Password Modal (Admin Exclusive) */}
+      {resetModalStaff && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+          <div className="w-full max-w-lg rounded-2xl bg-slate-900 border border-slate-800 p-6 shadow-2xl">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <h3 className="text-lg font-bold text-white font-serif flex items-center gap-2">
+                <KeyRound className="w-5 h-5 text-amber-500" />
+                Reset Staff Password
+              </h3>
+              <span className="text-xs px-2.5 py-0.5 rounded-full bg-slate-800 text-slate-300 font-mono">
+                Staff ID #{resetModalStaff.staff_id}
+              </span>
+            </div>
+
+            {/* Target Account Summary */}
+            <div className="mt-4 p-3 rounded-xl bg-slate-950/70 border border-slate-800/80 flex items-center justify-between">
+              <div>
+                <p className="text-sm font-semibold text-white">{resetModalStaff.full_name}</p>
+                <p className="text-xs text-slate-400 font-mono">@{resetModalStaff.username}</p>
+              </div>
+              <span className="text-xs px-2.5 py-1 rounded-md bg-amber-500/10 text-amber-400 border border-amber-500/20 font-medium">
+                {resetModalStaff.role_name}
+              </span>
+            </div>
+
+            {resetError && (
+              <div className="mt-4 p-3 rounded-xl bg-red-500/10 border border-red-500/30 text-red-400 text-xs flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>{resetError}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleResetPassword} className="mt-4 space-y-4">
+              {/* New Password Input */}
+              <div>
+                <label className="block text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-1">
+                  New Password
+                </label>
+                <div className="relative">
+                  <input
+                    type={showNewPassword ? "text" : "password"}
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    required
+                    placeholder="Enter new strong password"
+                    className="w-full p-2.5 pr-10 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white focus:outline-none focus:border-amber-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowNewPassword(!showNewPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white transition"
+                    title={showNewPassword ? "Hide password" : "Show password"}
+                  >
+                    {showNewPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+
+              {/* Confirm Password Input */}
+              <div>
+                <label className="block text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-1">
+                  Confirm New Password
+                </label>
+                <div className="relative">
+                  <input
+                    type={showConfirmPassword ? "text" : "password"}
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    required
+                    placeholder="Re-enter new password"
+                    className="w-full p-2.5 pr-10 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white focus:outline-none focus:border-amber-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white transition"
+                    title={showConfirmPassword ? "Hide password" : "Show password"}
+                  >
+                    {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+
+              {/* Password Policy Guidelines */}
+              <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 text-xs space-y-1.5">
+                <p className="font-semibold text-slate-300 flex items-center gap-1.5">
+                  <ShieldCheck className="w-3.5 h-3.5 text-amber-500" />
+                  Security Policy Requirements:
+                </p>
+                <div className="grid grid-cols-2 gap-1 text-[11px]">
+                  <span className={newPassword.length >= 12 && newPassword.length <= 128 ? "text-emerald-400" : "text-slate-500"}>
+                    • 12 to 128 characters
+                  </span>
+                  <span className={/[A-Z]/.test(newPassword) ? "text-emerald-400" : "text-slate-500"}>
+                    • 1+ uppercase letter
+                  </span>
+                  <span className={/[a-z]/.test(newPassword) ? "text-emerald-400" : "text-slate-500"}>
+                    • 1+ lowercase letter
+                  </span>
+                  <span className={/[0-9]/.test(newPassword) ? "text-emerald-400" : "text-slate-500"}>
+                    • 1+ digit (0-9)
+                  </span>
+                  <span className={/[^A-Za-z0-9]/.test(newPassword) ? "text-emerald-400" : "text-slate-500"}>
+                    • 1+ special symbol
+                  </span>
+                  <span className={newPassword.length > 0 && newPassword === confirmPassword ? "text-emerald-400" : "text-slate-500"}>
+                    • Passwords match
+                  </span>
+                </div>
+              </div>
+
+              <div className="mt-6 pt-4 border-t border-slate-800 flex items-center justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={handleCloseResetModal}
+                  disabled={isPending}
+                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isPending}
+                  className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-slate-950 text-xs font-semibold transition cursor-pointer flex items-center gap-1.5"
+                >
+                  {isPending ? "Resetting Password..." : "Update Password"}
                 </button>
               </div>
             </form>
