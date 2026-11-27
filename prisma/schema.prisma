@@ -1,0 +1,346 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+model amenities {
+  amenity_id          Int                   @id @default(autoincrement())
+  name                String                @unique(map: "uq_amenities_name") @db.VarChar(50)
+  room_type_amenities room_type_amenities[]
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model feedback {
+  feedback_id Int      @id @default(autoincrement())
+  stay_id     Int      @unique(map: "uq_feedback_stay")
+  rating      Int      @db.TinyInt
+  comments    String?  @db.Text
+  created_at  DateTime @default(now()) @db.Timestamp(0)
+  stays       stays    @relation(fields: [stay_id], references: [stay_id], onUpdate: Restrict, map: "fk_fb_stay")
+}
+
+model guests {
+  guest_id      Int             @id @default(autoincrement())
+  first_name    String          @db.VarChar(50)
+  last_name     String          @db.VarChar(50)
+  gender        guests_gender?
+  date_of_birth DateTime?       @db.Date
+  email         String?         @db.VarChar(100)
+  phone         String          @db.VarChar(20)
+  nationality   String?         @db.VarChar(50)
+  address       String?         @db.VarChar(255)
+  city          String?         @db.VarChar(50)
+  id_type       guests_id_type?
+  id_number     String?         @db.VarChar(50)
+  created_at    DateTime        @default(now()) @db.Timestamp(0)
+  reservations  reservations[]
+
+  @@unique([id_type, id_number], map: "uq_guests_id")
+  @@index([email], map: "idx_guests_email")
+  @@index([phone], map: "idx_guests_phone")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model housekeeping_tasks {
+  task_id      Int                       @id @default(autoincrement())
+  room_id      Int
+  assigned_to  Int?
+  status       housekeeping_tasks_status @default(pending)
+  created_at   DateTime                  @default(now()) @db.DateTime(0)
+  completed_at DateTime?                 @db.DateTime(0)
+  notes        String?                   @db.VarChar(255)
+  staff        staff?                    @relation(fields: [assigned_to], references: [staff_id], onDelete: Restrict, onUpdate: Restrict, map: "fk_hk_assigned_to")
+  rooms        rooms                     @relation(fields: [room_id], references: [room_id], onUpdate: Restrict, map: "fk_hk_room")
+
+  @@index([assigned_to], map: "fk_hk_assigned_to")
+  @@index([room_id], map: "fk_hk_room")
+  @@index([status], map: "idx_hk_status")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model invoice_items {
+  item_id        Int                     @id @default(autoincrement())
+  invoice_id     Int
+  item_type      invoice_items_item_type
+  stay_id        Int?                    @unique(map: "uq_ii_stay")
+  order_id       Int?                    @unique(map: "uq_ii_order")
+  description    String                  @db.VarChar(255)
+  quantity       Int
+  unit_price     Decimal                 @db.Decimal(10, 2)
+  invoices       invoices                @relation(fields: [invoice_id], references: [invoice_id], onDelete: Cascade, onUpdate: Restrict, map: "fk_ii_invoice")
+  service_orders service_orders?         @relation(fields: [order_id], references: [order_id], onDelete: Restrict, onUpdate: Restrict, map: "fk_ii_order")
+  stays          stays?                  @relation(fields: [stay_id], references: [stay_id], onDelete: Restrict, onUpdate: Restrict, map: "fk_ii_stay")
+
+  @@index([invoice_id], map: "fk_ii_invoice")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model invoices {
+  invoice_id      Int             @id @default(autoincrement())
+  reservation_id  Int             @unique(map: "uq_invoices_reservation")
+  issue_date      DateTime        @default(now()) @db.DateTime(0)
+  subtotal        Decimal         @db.Decimal(10, 2)
+  tax_amount      Decimal         @default(0.00) @db.Decimal(10, 2)
+  discount_amount Decimal         @default(0.00) @db.Decimal(10, 2)
+  total_amount    Decimal         @db.Decimal(10, 2)
+  status          invoices_status @default(issued)
+  generated_by    Int
+  invoice_items   invoice_items[]
+  staff           staff           @relation(fields: [generated_by], references: [staff_id], onUpdate: Restrict, map: "fk_inv_generated_by")
+  reservations    reservations    @relation(fields: [reservation_id], references: [reservation_id], onUpdate: Restrict, map: "fk_inv_reservation")
+
+  @@index([generated_by], map: "fk_inv_generated_by")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model payments {
+  payment_id      Int             @id @default(autoincrement())
+  reservation_id  Int
+  amount          Decimal         @db.Decimal(10, 2)
+  method          payments_method
+  transaction_ref String?         @db.VarChar(100)
+  processed_by    Int
+  paid_at         DateTime        @default(now()) @db.DateTime(0)
+  staff           staff           @relation(fields: [processed_by], references: [staff_id], onUpdate: Restrict, map: "fk_pay_processed_by")
+  reservations    reservations    @relation(fields: [reservation_id], references: [reservation_id], onUpdate: Restrict, map: "fk_pay_reservation")
+
+  @@index([processed_by], map: "fk_pay_processed_by")
+  @@index([reservation_id, paid_at], map: "idx_pay_res_paid")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model reservation_rooms {
+  reservation_room_id Int          @id @default(autoincrement())
+  reservation_id      Int
+  room_id             Int
+  rate_per_night      Decimal      @db.Decimal(10, 2)
+  reservations        reservations @relation(fields: [reservation_id], references: [reservation_id], onUpdate: Restrict, map: "fk_rr_reservation")
+  rooms               rooms        @relation(fields: [room_id], references: [room_id], onUpdate: Restrict, map: "fk_rr_room")
+  stays               stays?
+
+  @@unique([reservation_id, room_id], map: "uq_rr_reservation_room")
+  @@index([room_id], map: "fk_rr_room")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model reservations {
+  reservation_id    Int                 @id @default(autoincrement())
+  guest_id          Int
+  created_by        Int?
+  source            reservations_source @default(walk_in)
+  check_in_date     DateTime            @db.Date
+  check_out_date    DateTime            @db.Date
+  adults            Int                 @db.TinyInt
+  children          Int                 @default(0) @db.TinyInt
+  status            reservations_status @default(pending)
+  special_requests  String?             @db.Text
+  cancel_reason     String?             @db.VarChar(255)
+  created_at        DateTime            @default(now()) @db.Timestamp(0)
+  invoices          invoices?
+  payments          payments[]
+  reservation_rooms reservation_rooms[]
+  staff             staff?              @relation(fields: [created_by], references: [staff_id], onDelete: Restrict, onUpdate: Restrict, map: "fk_res_created_by")
+  guests            guests              @relation(fields: [guest_id], references: [guest_id], onUpdate: Restrict, map: "fk_res_guest")
+
+  @@index([created_by], map: "fk_res_created_by")
+  @@index([guest_id], map: "fk_res_guest")
+  @@index([check_in_date, check_out_date], map: "idx_res_dates")
+  @@index([status], map: "idx_res_status")
+}
+
+model roles {
+  role_id     Int     @id @default(autoincrement())
+  role_name   String  @unique(map: "uq_roles_name") @db.VarChar(50)
+  description String? @db.VarChar(255)
+  staff       staff[]
+}
+
+model room_type_amenities {
+  room_type_id Int
+  amenity_id   Int
+  amenities    amenities  @relation(fields: [amenity_id], references: [amenity_id], onDelete: Cascade, onUpdate: Restrict, map: "fk_rta_amenity")
+  room_types   room_types @relation(fields: [room_type_id], references: [room_type_id], onDelete: Cascade, onUpdate: Restrict, map: "fk_rta_room_type")
+
+  @@id([room_type_id, amenity_id])
+  @@index([amenity_id], map: "fk_rta_amenity")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model room_types {
+  room_type_id        Int                   @id @default(autoincrement())
+  name                String                @unique(map: "uq_room_types_name") @db.VarChar(50)
+  description         String?               @db.Text
+  base_price          Decimal               @db.Decimal(10, 2)
+  max_adults          Int                   @db.TinyInt
+  max_children        Int                   @default(0) @db.TinyInt
+  bed_type            String?               @db.VarChar(30)
+  room_type_amenities room_type_amenities[]
+  rooms               rooms[]
+}
+
+model rooms {
+  room_id            Int                  @id @default(autoincrement())
+  room_number        String               @unique(map: "uq_rooms_number") @db.VarChar(10)
+  floor              Int?                 @db.TinyInt
+  room_type_id       Int
+  status             rooms_status         @default(available)
+  notes              String?              @db.VarChar(255)
+  housekeeping_tasks housekeeping_tasks[]
+  reservation_rooms  reservation_rooms[]
+  room_types         room_types           @relation(fields: [room_type_id], references: [room_type_id], onUpdate: Restrict, map: "fk_rooms_type")
+
+  @@index([room_type_id], map: "fk_rooms_type")
+  @@index([status], map: "idx_rooms_status")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model service_orders {
+  order_id      Int                   @id @default(autoincrement())
+  stay_id       Int
+  service_id    Int
+  quantity      Int                   @default(1)
+  unit_price    Decimal               @db.Decimal(10, 2)
+  status        service_orders_status @default(ordered)
+  ordered_by    Int
+  ordered_at    DateTime              @default(now()) @db.Timestamp(0)
+  invoice_items invoice_items?
+  staff         staff                 @relation(fields: [ordered_by], references: [staff_id], onUpdate: Restrict, map: "fk_so_ordered_by")
+  services      services              @relation(fields: [service_id], references: [service_id], onUpdate: Restrict, map: "fk_so_service")
+  stays         stays                 @relation(fields: [stay_id], references: [stay_id], onUpdate: Restrict, map: "fk_so_stay")
+
+  @@index([ordered_by], map: "fk_so_ordered_by")
+  @@index([service_id], map: "fk_so_service")
+  @@index([stay_id], map: "fk_so_stay")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model services {
+  service_id     Int               @id @default(autoincrement())
+  name           String            @unique(map: "uq_services_name") @db.VarChar(100)
+  category       services_category @default(other)
+  price          Decimal           @db.Decimal(10, 2)
+  is_active      Boolean           @default(true)
+  service_orders service_orders[]
+}
+
+model staff {
+  staff_id                          Int                  @id @default(autoincrement())
+  role_id                           Int
+  first_name                        String               @db.VarChar(50)
+  last_name                         String               @db.VarChar(50)
+  username                          String               @unique(map: "uq_staff_username") @db.VarChar(50)
+  password_hash                     String               @db.VarChar(255)
+  email                             String?              @unique(map: "uq_staff_email") @db.VarChar(100)
+  phone                             String?              @db.VarChar(20)
+  hire_date                         DateTime?            @db.Date
+  is_active                         Boolean              @default(true)
+  created_at                        DateTime             @default(now()) @db.Timestamp(0)
+  housekeeping_tasks                housekeeping_tasks[]
+  invoices                          invoices[]
+  payments                          payments[]
+  reservations                      reservations[]
+  service_orders                    service_orders[]
+  roles                             roles                @relation(fields: [role_id], references: [role_id], onUpdate: Restrict, map: "fk_staff_role")
+  stays_stays_checked_in_byTostaff  stays[]              @relation("stays_checked_in_byTostaff")
+  stays_stays_checked_out_byTostaff stays[]              @relation("stays_checked_out_byTostaff")
+
+  @@index([role_id], map: "fk_staff_role")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model stays {
+  stay_id                           Int               @id @default(autoincrement())
+  reservation_room_id               Int               @unique(map: "uq_stays_rr")
+  actual_check_in                   DateTime          @db.DateTime(0)
+  actual_check_out                  DateTime?         @db.DateTime(0)
+  checked_in_by                     Int
+  checked_out_by                    Int?
+  feedback                          feedback?
+  invoice_items                     invoice_items?
+  service_orders                    service_orders[]
+  staff_stays_checked_in_byTostaff  staff             @relation("stays_checked_in_byTostaff", fields: [checked_in_by], references: [staff_id], onUpdate: Restrict, map: "fk_stays_in_by")
+  staff_stays_checked_out_byTostaff staff?            @relation("stays_checked_out_byTostaff", fields: [checked_out_by], references: [staff_id], onDelete: Restrict, onUpdate: Restrict, map: "fk_stays_out_by")
+  reservation_rooms                 reservation_rooms @relation(fields: [reservation_room_id], references: [reservation_room_id], onUpdate: Restrict, map: "fk_stays_rr")
+
+  @@index([checked_in_by], map: "fk_stays_in_by")
+  @@index([checked_out_by], map: "fk_stays_out_by")
+}
+
+enum invoice_items_item_type {
+  room
+  service
+  penalty
+  other
+}
+
+enum services_category {
+  restaurant
+  laundry
+  spa
+  transport
+  minibar
+  other
+}
+
+enum guests_gender {
+  M
+  F
+  Other
+}
+
+enum housekeeping_tasks_status {
+  pending
+  in_progress
+  done
+}
+
+enum payments_method {
+  cash
+  card
+  bank_transfer
+  online
+  cheque
+}
+
+enum reservations_source {
+  walk_in
+  phone
+  online
+}
+
+enum rooms_status {
+  available
+  occupied
+  cleaning
+  maintenance
+}
+
+enum service_orders_status {
+  ordered
+  delivered
+  cancelled
+}
+
+enum invoices_status {
+  issued
+  paid
+}
+
+enum reservations_status {
+  pending
+  confirmed
+  checked_in
+  checked_out
+  cancelled
+  no_show
+}
+
+enum guests_id_type {
+  CNIC
+  Passport
+  License
+  Other
+}
