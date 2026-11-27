@@ -4,6 +4,13 @@ import { prisma } from "@/lib/prisma";
 import { getStaffSession } from "./auth";
 import { revalidatePath } from "next/cache";
 import * as argon2 from "argon2";
+import { Prisma } from "@prisma/client";
+import {
+  calculateFinancialSummary,
+  syncInvoiceStatus,
+  lockInvoiceForReservation,
+  type PaymentStatus,
+} from "@/lib/financial";
 import {
   addNotification,
   logActivity,
@@ -224,12 +231,11 @@ export async function getStaffReservations(statusFilter?: string) {
           (1000 * 60 * 60 * 24)
       )
     );
-    const totalAmount = r.invoices
-      ? parseFloat(r.invoices.total_amount.toString())
-      : ratePerNight * nights;
+    const totalAmountDecimal = r.invoices
+      ? r.invoices.total_amount
+      : new Prisma.Decimal(ratePerNight).times(nights);
 
-    const totalPaid = r.payments.reduce((acc, p) => acc + parseFloat(p.amount.toString()), 0);
-    const isPaid = totalPaid >= totalAmount && totalAmount > 0;
+    const summary = calculateFinancialSummary(totalAmountDecimal, r.payments);
 
     const assignedRooms = r.reservation_rooms.map((rr) => {
       const stay = rr.stays;
@@ -276,9 +282,10 @@ export async function getStaffReservations(statusFilter?: string) {
       check_out_date: r.check_out_date.toISOString().split("T")[0],
       adults: r.adults,
       children: r.children,
-      total_amount: totalAmount,
-      total_paid: totalPaid,
-      remaining_balance: Math.max(0, totalAmount - totalPaid),
+      total_amount: summary.totalAmountNum,
+      total_paid: summary.totalPaidNum,
+      remaining_balance: summary.remainingBalanceNum,
+      credit_balance: summary.creditBalanceNum,
       status: r.status,
       created_at: r.created_at.toISOString(),
       cancel_reason: r.cancel_reason,
@@ -288,7 +295,7 @@ export async function getStaffReservations(statusFilter?: string) {
         : r.source === "online"
         ? "Online Guest"
         : "Reception",
-      payment_status: isPaid ? "PAID" : totalPaid > 0 ? "PARTIALLY PAID" : "YET TO PAY",
+      payment_status: summary.paymentStatus,
       has_active_stay: primaryRr?.stays ? primaryRr.stays.actual_check_out === null : false,
       actual_check_in: primaryRr?.stays?.actual_check_in
         ? primaryRr.stays.actual_check_in.toISOString()
@@ -331,9 +338,7 @@ export async function getActiveCheckedInStays() {
     const rr = s.reservation_rooms;
     const res = rr.reservations;
     const room = rr.rooms;
-    const totalPaid = res.payments.reduce((acc, p) => acc + parseFloat(p.amount.toString()), 0);
-    const invoiceTotal = res.invoices ? parseFloat(res.invoices.total_amount.toString()) : 0;
-    const isPaid = totalPaid >= invoiceTotal && invoiceTotal > 0;
+    const summary = calculateFinancialSummary(res.invoices?.total_amount ?? 0, res.payments);
 
     return {
       stay_id: s.stay_id,
@@ -350,10 +355,11 @@ export async function getActiveCheckedInStays() {
       check_in_time: s.actual_check_in.toISOString(),
       expected_check_out: res.check_out_date.toISOString().split("T")[0],
       stay_status: "Checked In",
-      payment_status: isPaid ? "PAID" : totalPaid > 0 ? "PARTIALLY PAID" : "YET TO PAY",
-      total_amount: invoiceTotal,
-      amount_paid: totalPaid,
-      remaining_balance: Math.max(0, invoiceTotal - totalPaid),
+      payment_status: summary.paymentStatus,
+      total_amount: summary.totalAmountNum,
+      amount_paid: summary.totalPaidNum,
+      remaining_balance: summary.remainingBalanceNum,
+      credit_balance: summary.creditBalanceNum,
       checked_in_by: s.staff_stays_checked_in_byTostaff
         ? `${s.staff_stays_checked_in_byTostaff.first_name} ${s.staff_stays_checked_in_byTostaff.last_name}`
         : "Staff",
@@ -371,6 +377,7 @@ export async function checkInGuest(reservationId: number, roomId?: number) {
       where: { reservation_id: reservationId },
       include: {
         guests: true,
+        invoices: true,
         reservation_rooms: {
           include: {
             rooms: true,
@@ -506,6 +513,7 @@ export async function checkOutGuest(reservationId: number, roomId?: number) {
       where: { reservation_id: reservationId },
       include: {
         guests: true,
+        invoices: true,
         reservation_rooms: {
           include: {
             rooms: true,
@@ -574,6 +582,12 @@ export async function checkOutGuest(reservationId: number, roomId?: number) {
             where: { reservation_id: reservationId },
             data: { status: "checked_out" },
           });
+        }
+
+        // 5. Synchronize invoice status upon checkout under row lock
+        if (reservation.invoices) {
+          await lockInvoiceForReservation(tx, reservationId, session.staff_id);
+          await syncInvoiceStatus(tx, reservation.invoices.invoice_id);
         }
       },
       { maxWait: 20000, timeout: 30000 }
@@ -668,73 +682,51 @@ export async function recordReservationPayment(
       return { success: false, error: "Reservation not found." };
     }
 
-    // Determine or generate invoice if missing
-    let invoice = reservation.invoices;
-    let totalDue = invoice ? parseFloat(invoice.total_amount.toString()) : 0;
-
-    if (!invoice) {
-      const primaryRr = reservation.reservation_rooms[0];
-      const rate = primaryRr ? parseFloat(primaryRr.rate_per_night.toString()) : 0;
-      const nights = Math.max(
-        1,
-        Math.ceil(
-          (new Date(reservation.check_out_date).getTime() - new Date(reservation.check_in_date).getTime()) /
-            (1000 * 60 * 60 * 24)
-        )
-      );
-      totalDue = rate * nights;
-
-      invoice = await prisma.invoices.create({
-        data: {
-          reservation_id: reservationId,
-          subtotal: totalDue,
-          tax_amount: 0,
-          discount_amount: 0,
-          total_amount: totalDue,
-          status: "issued",
-          generated_by: session.staff_id,
-        },
-      });
-    }
-
-    const prevPaid = reservation.payments.reduce(
-      (sum, p) => sum + parseFloat(p.amount.toString()),
-      0
-    );
-    const newTotalPaid = prevPaid + amount;
-    const remainingBalance = Math.max(0, totalDue - newTotalPaid);
-    const isFullySettled = newTotalPaid >= totalDue;
-
+    const primaryRr = reservation.reservation_rooms[0];
+    const primaryRate = primaryRr ? new Prisma.Decimal(primaryRr.rate_per_night) : new Prisma.Decimal(0);
+    const decimalPaymentAmount = new Prisma.Decimal(amount);
     const ref = transactionRef?.trim() || `PAY-${method.toUpperCase().slice(0, 4)}-${Date.now()}`;
 
-    // Execute payment creation in transaction
-    await prisma.$transaction(
+    // Execute payment creation and atomic invoice recalculation in transaction with invoice row locking
+    const summary = await prisma.$transaction(
       async (tx) => {
+        // 1. Lock invoice row for update FIRST, establishing consistent serialization
+        const lockedInvoice = await lockInvoiceForReservation(
+          tx,
+          reservationId,
+          session.staff_id,
+          reservation.check_in_date,
+          reservation.check_out_date,
+          primaryRate
+        );
+
+        // 2. Insert payment record
         await tx.payments.create({
           data: {
             reservation_id: reservationId,
-            amount,
+            amount: decimalPaymentAmount,
             method,
             transaction_ref: ref,
             processed_by: session.staff_id,
           },
         });
 
-        if (isFullySettled && invoice.status !== "paid") {
-          await tx.invoices.update({
-            where: { invoice_id: invoice.invoice_id },
-            data: { status: "paid" },
-          });
-        }
+        // 3. Atomically synchronize invoice status against all payments while holding the lock
+        return await syncInvoiceStatus(tx, lockedInvoice.invoice_id);
       },
       { maxWait: 20000, timeout: 30000 }
     );
+
+    const remainingBalance = summary.remainingBalanceNum;
+    const creditBalance = summary.creditBalanceNum;
+    const isFullySettled = summary.isFullySettled;
+    const totalPaid = summary.totalPaidNum;
 
     logActivity(
       session.full_name,
       session.role_name,
       "Payment Recorded",
-      `Collected PKR ${amount.toLocaleString()} via ${method.toUpperCase()} for booking RES-${String(reservationId).padStart(4, "0")} (${reservation.guests.first_name} ${reservation.guests.last_name}). Remaining balance: PKR ${remainingBalance.toLocaleString()}.`
+      `Collected PKR ${amount.toLocaleString()} via ${method.toUpperCase()} for booking RES-${String(reservationId).padStart(4, "0")} (${reservation.guests.first_name} ${reservation.guests.last_name}). ${isFullySettled ? (creditBalance > 0 ? `Bill fully settled with PKR ${creditBalance.toLocaleString()} credit balance.` : "Bill is fully settled.") : `Remaining balance: PKR ${remainingBalance.toLocaleString()}.`}`
     );
 
     revalidatePath("/staff/dashboard");
@@ -742,13 +734,134 @@ export async function recordReservationPayment(
 
     return {
       success: true,
-      message: `Payment of PKR ${amount.toLocaleString()} recorded successfully. ${isFullySettled ? "Bill is fully settled." : `Remaining balance: PKR ${remainingBalance.toLocaleString()}.`}`,
+      message: `Payment of PKR ${amount.toLocaleString()} recorded successfully. ${isFullySettled ? (creditBalance > 0 ? `Bill is fully settled. Excess credit: PKR ${creditBalance.toLocaleString()}.` : "Bill is fully settled.") : `Remaining balance: PKR ${remainingBalance.toLocaleString()}.`}`,
       remainingBalance,
+      creditBalance,
       isFullySettled,
-      totalPaid: newTotalPaid,
+      totalPaid,
+      paymentStatus: summary.paymentStatus,
     };
   } catch (err: any) {
     return { success: false, error: err.message || "Failed to record payment." };
+  }
+}
+
+// ─── Post Incidental / Service Charge ────────────────────────────────────────
+
+export async function postIncidentalCharge(
+  reservationId: number,
+  charge: {
+    description: string;
+    amount: number;
+    itemType?: "service" | "penalty" | "other" | "room";
+    quantity?: number;
+    stayId?: number;
+  }
+) {
+  try {
+    const session = await requireRole(["Admin", "Manager", "Receptionist"]);
+
+    const cleanDescription = (charge.description || "").trim();
+    if (!cleanDescription) {
+      return { success: false, error: "Charge description is required." };
+    }
+
+    const unitPrice = charge.amount;
+    if (typeof unitPrice !== "number" || isNaN(unitPrice) || unitPrice <= 0) {
+      return { success: false, error: "Charge amount must be a positive number." };
+    }
+
+    const qty = charge.quantity && charge.quantity > 0 ? Math.floor(charge.quantity) : 1;
+    const decimalUnitPrice = new Prisma.Decimal(unitPrice);
+    const decimalChargeTotal = decimalUnitPrice.times(qty);
+
+    const reservation = await prisma.reservations.findUnique({
+      where: { reservation_id: reservationId },
+      include: {
+        guests: true,
+        invoices: true,
+        reservation_rooms: true,
+      },
+    });
+
+    if (!reservation) {
+      return { success: false, error: "Reservation not found." };
+    }
+
+    if (reservation.status === "cancelled") {
+      return { success: false, error: "Cannot post charges to a cancelled reservation." };
+    }
+
+    const primaryRr = reservation.reservation_rooms[0];
+    const primaryRate = primaryRr ? new Prisma.Decimal(primaryRr.rate_per_night) : new Prisma.Decimal(0);
+
+    // Execute atomic charge posting, invoice total update, and status sync under exclusive row lock
+    const summary = await prisma.$transaction(
+      async (tx) => {
+        // 1. Lock invoice row for update FIRST before reading or calculating any totals
+        const lockedInvoice = await lockInvoiceForReservation(
+          tx,
+          reservationId,
+          session.staff_id,
+          reservation.check_in_date,
+          reservation.check_out_date,
+          primaryRate
+        );
+
+        // 2. Create itemized invoice item
+        await tx.invoice_items.create({
+          data: {
+            invoice_id: lockedInvoice.invoice_id,
+            item_type: charge.itemType || "service",
+            description: cleanDescription,
+            quantity: qty,
+            unit_price: decimalUnitPrice,
+          },
+        });
+
+        // 3. Atomically increment invoice subtotal and total_amount using Decimal from the locked record
+        const newSubtotal = lockedInvoice.subtotal.plus(decimalChargeTotal);
+        const newTotal = lockedInvoice.total_amount.plus(decimalChargeTotal);
+
+        await tx.invoices.update({
+          where: { invoice_id: lockedInvoice.invoice_id },
+          data: {
+            subtotal: newSubtotal,
+            total_amount: newTotal,
+          },
+        });
+
+        // 4. Atomically synchronize invoice status against all payments while still holding the lock
+        // If invoice was previously "paid", this reverts it to "issued" when newTotal > payments
+        return await syncInvoiceStatus(tx, lockedInvoice.invoice_id);
+      },
+      { maxWait: 20000, timeout: 30000 }
+    );
+
+    logActivity(
+      session.full_name,
+      session.role_name,
+      "Incidental Charge Posted",
+      `Added charge "${cleanDescription}" (PKR ${decimalChargeTotal.toString()}) to booking RES-${String(reservationId).padStart(4, "0")} (${reservation.guests.first_name} ${reservation.guests.last_name}). Status: ${summary.paymentStatus}, Remaining: PKR ${summary.remainingBalanceNum.toLocaleString()}.`
+    );
+
+    revalidatePath("/staff/dashboard");
+    revalidatePath("/staff/dashboard/reservations");
+
+    return {
+      success: true,
+      message: `Charge of PKR ${decimalChargeTotal.toString()} posted successfully. Status is now ${summary.paymentStatus}.`,
+      summary: {
+        totalAmount: summary.totalAmountNum,
+        totalPaid: summary.totalPaidNum,
+        remainingBalance: summary.remainingBalanceNum,
+        creditBalance: summary.creditBalanceNum,
+        paymentStatus: summary.paymentStatus,
+        isFullySettled: summary.isFullySettled,
+      },
+    };
+  } catch (err: any) {
+    return { success: false, error: err.message || "Failed to post incidental charge." };
   }
 }
 

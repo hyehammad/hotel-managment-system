@@ -74,6 +74,7 @@ interface ReservationItem {
   payment_status: string;
   total_paid?: number;
   remaining_balance?: number;
+  credit_balance?: number;
   has_active_stay?: boolean;
   actual_check_in?: string | null;
   actual_check_out?: string | null;
@@ -288,7 +289,7 @@ export default function ReservationsClient({
       ? { ...resItem, room_id: roomId, room_number: roomNumber }
       : resItem;
     setCheckoutReservation(target);
-    const balance = target.remaining_balance ?? (target.payment_status === "PAID" ? 0 : target.total_amount);
+    const balance = target.remaining_balance ?? 0;
     setCheckoutPaymentAmount(balance);
     setCheckoutSettlePayment(balance > 0);
     setCheckoutPaymentMethod("cash");
@@ -301,6 +302,7 @@ export default function ReservationsClient({
 
     setActionMessage(null);
     startTransition(async () => {
+      let settlementSummary: { paymentStatus: string; remainingBalance: number; totalPaid?: number; creditBalance?: number } | null = null;
       // 1. If settlement requested and amount > 0, record payment first
       if (checkoutSettlePayment && checkoutPaymentAmount > 0) {
         const payRes = await recordReservationPayment(
@@ -315,6 +317,12 @@ export default function ReservationsClient({
           });
           return;
         }
+        settlementSummary = {
+          paymentStatus: payRes.paymentStatus || (payRes.isFullySettled ? "PAID" : "PARTIALLY PAID"),
+          remainingBalance: payRes.remainingBalance ?? 0,
+          totalPaid: payRes.totalPaid,
+          creditBalance: payRes.creditBalance,
+        };
       }
 
       // 2. Perform check-out
@@ -326,14 +334,10 @@ export default function ReservationsClient({
               ? {
                   ...item,
                   status: "checked_out",
-                  payment_status:
-                    checkoutSettlePayment && checkoutPaymentAmount >= (item.remaining_balance ?? item.total_amount)
-                      ? "PAID"
-                      : item.payment_status,
-                  remaining_balance: Math.max(
-                    0,
-                    (item.remaining_balance ?? item.total_amount) - (checkoutSettlePayment ? checkoutPaymentAmount : 0)
-                  ),
+                  payment_status: settlementSummary ? settlementSummary.paymentStatus : item.payment_status,
+                  remaining_balance: settlementSummary ? settlementSummary.remainingBalance : (item.remaining_balance ?? item.total_amount),
+                  total_paid: settlementSummary?.totalPaid ?? item.total_paid,
+                  credit_balance: settlementSummary?.creditBalance ?? item.credit_balance,
                   room_current_status: "cleaning",
                   has_active_stay: false,
                   actual_check_out: new Date().toISOString(),
@@ -357,10 +361,10 @@ export default function ReservationsClient({
               ? {
                   ...prev,
                   status: "checked_out",
-                  payment_status:
-                    checkoutSettlePayment && checkoutPaymentAmount >= (prev.remaining_balance ?? prev.total_amount)
-                      ? "PAID"
-                      : prev.payment_status,
+                  payment_status: settlementSummary ? settlementSummary.paymentStatus : prev.payment_status,
+                  remaining_balance: settlementSummary ? settlementSummary.remainingBalance : (prev.remaining_balance ?? prev.total_amount),
+                  total_paid: settlementSummary?.totalPaid ?? prev.total_paid,
+                  credit_balance: settlementSummary?.creditBalance ?? prev.credit_balance,
                   room_current_status: "cleaning",
                   has_active_stay: false,
                   assigned_rooms: prev.assigned_rooms?.map((ar) =>
@@ -395,7 +399,7 @@ export default function ReservationsClient({
 
   const handleOpenPaymentModal = (resItem: ReservationItem) => {
     setPaymentTargetRes(resItem);
-    const balance = resItem.remaining_balance ?? (resItem.payment_status === "PAID" ? 0 : resItem.total_amount);
+    const balance = resItem.remaining_balance ?? 0;
     setPaymentAmount(balance > 0 ? balance : resItem.total_amount);
     setPaymentMethod("cash");
     setPaymentModalOpen(true);
@@ -416,14 +420,16 @@ export default function ReservationsClient({
         paymentMethod
       );
       if (res.success) {
+        const nextStatus = res.paymentStatus || (res.isFullySettled ? "PAID" : "PARTIALLY PAID");
         setReservations((prev) =>
           prev.map((item) =>
             item.reservation_id === paymentTargetRes.reservation_id
               ? {
                   ...item,
-                  payment_status: res.isFullySettled ? "PAID" : "PARTIALLY PAID",
+                  payment_status: nextStatus,
                   total_paid: res.totalPaid,
                   remaining_balance: res.remainingBalance,
+                  credit_balance: res.creditBalance,
                 }
               : item
           )
@@ -433,9 +439,10 @@ export default function ReservationsClient({
             prev
               ? {
                   ...prev,
-                  payment_status: res.isFullySettled ? "PAID" : "PARTIALLY PAID",
+                  payment_status: nextStatus,
                   total_paid: res.totalPaid,
                   remaining_balance: res.remainingBalance,
+                  credit_balance: res.creditBalance,
                 }
               : null
           );
@@ -1321,15 +1328,21 @@ export default function ReservationsClient({
                   <div>
                     <span className="text-slate-400 block">Amount Paid:</span>{" "}
                     <span className="font-mono font-bold text-emerald-400 text-sm">
-                      PKR {(selectedResForDetail.total_paid ?? (selectedResForDetail.payment_status === "PAID" ? selectedResForDetail.total_amount : 0)).toLocaleString()}
+                      PKR {(selectedResForDetail.total_paid ?? 0).toLocaleString()}
                     </span>
                   </div>
                   <div>
                     <span className="text-slate-400 block">Remaining Due:</span>{" "}
-                    <span className={`font-mono font-bold text-sm ${(selectedResForDetail.remaining_balance ?? (selectedResForDetail.payment_status === "PAID" ? 0 : selectedResForDetail.total_amount)) > 0 ? "text-amber-400" : "text-emerald-400"}`}>
-                      PKR {(selectedResForDetail.remaining_balance ?? (selectedResForDetail.payment_status === "PAID" ? 0 : selectedResForDetail.total_amount)).toLocaleString()}
+                    <span className={`font-mono font-bold text-sm ${(selectedResForDetail.remaining_balance ?? 0) > 0 ? "text-amber-400" : "text-emerald-400"}`}>
+                      PKR {(selectedResForDetail.remaining_balance ?? 0).toLocaleString()}
                     </span>
                   </div>
+                  {(selectedResForDetail.credit_balance ?? 0) > 0 && (
+                    <div className="col-span-full flex items-center justify-between p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-xs text-emerald-400 font-semibold">
+                      <span>Guest Credit Balance:</span>
+                      <span className="font-mono">PKR {selectedResForDetail.credit_balance!.toLocaleString()} (Excess Guest Credit / Unapplied Balance)</span>
+                    </div>
+                  )}
                   <div className="col-span-full">
                     <span className="text-slate-400">Special Requests:</span>{" "}
                     <span className="text-slate-300 italic">
@@ -1426,15 +1439,37 @@ export default function ReservationsClient({
               <div className="flex justify-between">
                 <span className="text-slate-400">Amount Paid:</span>
                 <span className="font-mono text-emerald-400">
-                  PKR {(checkoutReservation.total_paid ?? (checkoutReservation.payment_status === "PAID" ? checkoutReservation.total_amount : 0)).toLocaleString()}
+                  PKR {(checkoutReservation.total_paid ?? 0).toLocaleString()}
                 </span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-400">Payment Status:</span>
+                {checkoutReservation.payment_status === "PAID" ? (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-sans">
+                    <CheckCircle2 className="w-2.5 h-2.5" /> PAID
+                  </span>
+                ) : checkoutReservation.payment_status === "PARTIALLY PAID" ? (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20 font-sans">
+                    PARTIALLY PAID
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-red-500/10 text-red-400 border border-red-500/20 font-sans">
+                    YET TO PAY
+                  </span>
+                )}
               </div>
               <div className="flex justify-between font-semibold">
                 <span className="text-slate-300">Remaining Due:</span>
-                <span className={`font-mono ${(checkoutReservation.remaining_balance ?? (checkoutReservation.payment_status === "PAID" ? 0 : checkoutReservation.total_amount)) > 0 ? "text-amber-400" : "text-emerald-400"}`}>
-                  PKR {(checkoutReservation.remaining_balance ?? (checkoutReservation.payment_status === "PAID" ? 0 : checkoutReservation.total_amount)).toLocaleString()}
+                <span className={`font-mono ${(checkoutReservation.remaining_balance ?? 0) > 0 ? "text-amber-400" : "text-emerald-400"}`}>
+                  PKR {(checkoutReservation.remaining_balance ?? 0).toLocaleString()}
                 </span>
               </div>
+              {(checkoutReservation.credit_balance ?? 0) > 0 && (
+                <div className="flex justify-between text-emerald-400 font-semibold bg-emerald-500/10 p-2 rounded-lg border border-emerald-500/20">
+                  <span>Guest Credit Balance:</span>
+                  <span className="font-mono">PKR {checkoutReservation.credit_balance!.toLocaleString()} (Excess Guest Credit / Unapplied Balance)</span>
+                </div>
+              )}
               <div className="flex justify-between border-t border-slate-850 pt-2">
                 <span className="text-slate-400">Next Step:</span>
                 <span className="text-violet-400 font-semibold">Housekeeping Turnover Dispatched</span>
@@ -1442,7 +1477,7 @@ export default function ReservationsClient({
             </div>
 
             {/* Settle Balance Section */}
-            {(checkoutReservation.remaining_balance ?? (checkoutReservation.payment_status === "PAID" ? 0 : checkoutReservation.total_amount)) > 0 ? (
+            {(checkoutReservation.remaining_balance ?? 0) > 0 ? (
               <div className="mt-4 p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/25 space-y-2.5 text-xs">
                 <div className="flex items-center justify-between text-amber-400 font-bold">
                   <span className="flex items-center gap-1.5">
@@ -1548,15 +1583,21 @@ export default function ReservationsClient({
               <div className="flex justify-between">
                 <span className="text-slate-400">Paid to Date:</span>
                 <span className="font-mono text-emerald-400">
-                  PKR {(paymentTargetRes.total_paid ?? (paymentTargetRes.payment_status === "PAID" ? paymentTargetRes.total_amount : 0)).toLocaleString()}
+                  PKR {(paymentTargetRes.total_paid ?? 0).toLocaleString()}
                 </span>
               </div>
               <div className="flex justify-between font-semibold border-t border-slate-850 pt-2">
                 <span className="text-slate-300">Remaining Balance:</span>
-                <span className="font-mono text-amber-400">
-                  PKR {(paymentTargetRes.remaining_balance ?? (paymentTargetRes.payment_status === "PAID" ? 0 : paymentTargetRes.total_amount)).toLocaleString()}
+                <span className={`font-mono font-bold ${(paymentTargetRes.remaining_balance ?? 0) > 0 ? "text-amber-400" : "text-emerald-400"}`}>
+                  PKR {(paymentTargetRes.remaining_balance ?? 0).toLocaleString()}
                 </span>
               </div>
+              {(paymentTargetRes.credit_balance ?? 0) > 0 && (
+                <div className="flex justify-between text-emerald-400 font-semibold bg-emerald-500/10 p-2 rounded-lg border border-emerald-500/20 text-xs">
+                  <span>Credit Balance:</span>
+                  <span className="font-mono">PKR {paymentTargetRes.credit_balance!.toLocaleString()}</span>
+                </div>
+              )}
             </div>
 
             <div className="mt-4 space-y-3">
