@@ -322,14 +322,25 @@ export default async function DashboardOverviewPage({
                           <CheckCircle2 className="w-3 h-3" />
                           PAID
                         </span>
-                      ) : (
+                      ) : stay.payment_status === "PARTIALLY PAID" ? (
                         <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                          <AlertCircle className="w-3 h-3" />
+                          PARTIALLY PAID
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-red-500/10 text-red-400 border border-red-500/20">
                           <AlertCircle className="w-3 h-3" />
                           YET TO PAY
                         </span>
                       )}
-                      <div className="text-[10px] text-slate-500 mt-0.5 font-mono">
+                      <div className="text-[10px] text-slate-400 mt-0.5 font-mono">
                         PKR {stay.amount_paid.toLocaleString()} / {stay.total_amount.toLocaleString()}
+                        {stay.remaining_balance > 0 && (
+                          <span className="text-amber-400 font-semibold ml-1">(Due: {stay.remaining_balance.toLocaleString()})</span>
+                        )}
+                        {stay.credit_balance > 0 && (
+                          <span className="text-emerald-400 font-semibold ml-1">(Credit: {stay.credit_balance.toLocaleString()})</span>
+                        )}
                       </div>
                     </td>
 
