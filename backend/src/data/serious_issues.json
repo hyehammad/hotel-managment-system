@@ -1,0 +1,21 @@
+[
+  {
+    "id": "issue-1",
+    "roomNumber": "302",
+    "title": "Main AC Chiller Compressor Burnout",
+    "description": "HVAC central compressor in Room 302 burnt out. Requires replacement compressor unit and certified external HVAC technician.",
+    "estimatedCost": "PKR 145,000",
+    "reportedBy": "Chief Technician",
+    "reportedAt": "2026-11-15T12:00:00.000Z",
+    "status": "completed",
+    "reviewedBy": "System Administrator",
+    "reviewedAt": "2026-11-15T13:10:22.000Z",
+    "reviewNotes": "Authorized for procurement and specialized HVAC repair.",
+    "linkedTaskId": 10,
+    "startedBy": "Chief Technician",
+    "startedAt": "2026-11-15T13:10:22.000Z",
+    "completedBy": "Chief Technician",
+    "completedAt": "2026-11-15T20:08:42.978Z",
+    "completionNotes": "Repaired and verified."
+  }
+]
