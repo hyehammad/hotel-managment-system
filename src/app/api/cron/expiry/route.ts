@@ -5,6 +5,16 @@ export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
   try {
+    const cronSecret = process.env.CRON_SECRET;
+    if (cronSecret) {
+      const authHeader = request.headers.get("authorization");
+      const headerSecret = request.headers.get("x-cron-secret");
+      const expectedBearer = `Bearer ${cronSecret}`;
+      if (authHeader !== expectedBearer && headerSecret !== cronSecret) {
+        return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
+      }
+    }
+
     const result = await expireOverdueReservations();
     return NextResponse.json({
       success: true,

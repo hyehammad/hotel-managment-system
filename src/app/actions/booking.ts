@@ -322,11 +322,12 @@ export async function lookupGuestBooking(referenceInput: string, contactInput: s
       return { success: false, message: "No reservation found matching this reference." };
     }
 
-    // Verify contact info matches guest record
-    const guestEmail = (reservation.guests.email || "").toLowerCase();
-    const guestPhone = (reservation.guests.phone || "").toLowerCase();
+    // Verify contact info matches guest record (strict exact match)
+    const guestEmail = (reservation.guests.email || "").toLowerCase().trim();
+    const guestPhone = (reservation.guests.phone || "").toLowerCase().trim();
+    const inputContact = cleanContact.toLowerCase().trim();
 
-    if (!cleanContact || (!guestEmail.includes(cleanContact) && !guestPhone.includes(cleanContact))) {
+    if (!inputContact || (guestEmail !== inputContact && guestPhone !== inputContact)) {
       return { success: false, message: "The email or phone provided does not match the reservation record." };
     }
 
