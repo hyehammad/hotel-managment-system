@@ -329,19 +329,20 @@ export async function lookupGuestBooking(referenceInput: string, contactInput: s
       return { success: false, message: "No reservation found matching this reference." };
     }
 
-    // Verify contact info matches guest record (strict exact canonical match)
+    // Verify contact info matches guest record (strict exact canonical or exact email match)
     const guestEmail = (reservation.guests.email || "").toLowerCase().trim();
     const guestPhoneCanonical = canonicalizePhone(reservation.guests.phone || "");
-    const guestPhoneRaw = (reservation.guests.phone || "").trim().toLowerCase();
 
-    const inputEmail = cleanContact.toLowerCase().trim();
-    const inputPhoneCanonical = canonicalizePhone(cleanContact);
-    const inputPhoneRaw = cleanContact.trim().toLowerCase();
+    const inputClean = cleanContact.trim();
+    const inputEmail = inputClean.toLowerCase();
+    const inputPhoneCanonical = canonicalizePhone(inputClean);
 
-    const emailMatches = guestEmail.length > 0 && guestEmail === inputEmail;
+    const isEmailInput = inputClean.includes("@");
+    const emailMatches = isEmailInput && guestEmail.length > 0 && guestEmail === inputEmail;
     const phoneMatches =
-      (guestPhoneCanonical.length > 0 && guestPhoneCanonical === inputPhoneCanonical) ||
-      (guestPhoneRaw.length > 0 && guestPhoneRaw === inputPhoneRaw);
+      guestPhoneCanonical.length > 0 &&
+      inputPhoneCanonical.length > 0 &&
+      guestPhoneCanonical === inputPhoneCanonical;
 
     if (!emailMatches && !phoneMatches) {
       return { success: false, message: "The email or phone provided does not match the reservation record." };

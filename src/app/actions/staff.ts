@@ -1982,12 +1982,37 @@ export async function toggleStaffActive(targetStaffId: number) {
 export async function adminResetStaffPassword(targetStaffId: number, newPassword: string) {
   const session = await requireRole(["Admin"]);
 
-  if (!newPassword || newPassword.length < 8) {
-    return { success: false, error: "Password must be at least 8 characters long." };
+  if (!Number.isInteger(targetStaffId) || targetStaffId <= 0) {
+    return { success: false, error: "Invalid target staff ID." };
   }
 
   if (targetStaffId === 1) {
     return { success: false, error: "System Gateway account cannot be modified." };
+  }
+
+  // Strong password policy: 12-128 chars, uppercase, lowercase, digit, special character
+  if (!newPassword || typeof newPassword !== "string") {
+    return { success: false, error: "Password is required." };
+  }
+
+  if (newPassword.length < 12) {
+    return { success: false, error: "Password must be at least 12 characters long." };
+  }
+
+  if (newPassword.length > 128) {
+    return { success: false, error: "Password cannot exceed 128 characters." };
+  }
+
+  const hasUpper = /[A-Z]/.test(newPassword);
+  const hasLower = /[a-z]/.test(newPassword);
+  const hasDigit = /[0-9]/.test(newPassword);
+  const hasSpecial = /[^A-Za-z0-9]/.test(newPassword);
+
+  if (!hasUpper || !hasLower || !hasDigit || !hasSpecial) {
+    return {
+      success: false,
+      error: "Password must contain at least one uppercase letter, one lowercase letter, one number, and one special character.",
+    };
   }
 
   const target = await prisma.staff.findUnique({
@@ -1995,7 +2020,16 @@ export async function adminResetStaffPassword(targetStaffId: number, newPassword
     include: { roles: true },
   });
 
-  if (!target) return { success: false, error: "Staff member not found." };
+  if (!target) {
+    return { success: false, error: "Staff member not found." };
+  }
+
+  if (!target.is_active) {
+    return {
+      success: false,
+      error: "Cannot reset password for a deactivated account. Please activate the account first.",
+    };
+  }
 
   const passwordHash = await argon2.hash(newPassword, { type: argon2.argon2id });
 
