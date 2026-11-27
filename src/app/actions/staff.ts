@@ -1979,6 +1979,42 @@ export async function toggleStaffActive(targetStaffId: number) {
   return { success: true };
 }
 
+export async function adminResetStaffPassword(targetStaffId: number, newPassword: string) {
+  const session = await requireRole(["Admin"]);
+
+  if (!newPassword || newPassword.length < 8) {
+    return { success: false, error: "Password must be at least 8 characters long." };
+  }
+
+  if (targetStaffId === 1) {
+    return { success: false, error: "System Gateway account cannot be modified." };
+  }
+
+  const target = await prisma.staff.findUnique({
+    where: { staff_id: targetStaffId },
+    include: { roles: true },
+  });
+
+  if (!target) return { success: false, error: "Staff member not found." };
+
+  const passwordHash = await argon2.hash(newPassword, { type: argon2.argon2id });
+
+  await prisma.staff.update({
+    where: { staff_id: targetStaffId },
+    data: { password_hash: passwordHash },
+  });
+
+  logActivity(
+    session.full_name,
+    "Admin",
+    "Staff Password Reset",
+    `Reset password for staff account #${targetStaffId} (@${target.username}, role: ${target.roles.role_name}).`
+  );
+
+  revalidatePath("/staff/dashboard/staff");
+  return { success: true };
+}
+
 // ─── Activity Log & Notifications ───────────────────────────────────────────
 
 export async function getActivityHistory() {

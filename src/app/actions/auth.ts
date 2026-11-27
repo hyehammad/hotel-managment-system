@@ -20,13 +20,26 @@ export interface StaffSession {
 
 const SESSION_COOKIE = "hms_staff_session";
 const SESSION_MAX_AGE = 60 * 60 * 8; // 8 hours
-const SESSION_SECRET =
-  process.env.SESSION_SECRET ||
-  process.env.NEXTAUTH_SECRET ||
-  "hms_production_session_signing_secret_key_32chars!";
+
+function getSessionSecret(): string {
+  const secret = process.env.SESSION_SECRET;
+  if (!secret) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error(
+        "FATAL: SESSION_SECRET environment variable is missing in production. Staff session signing is blocked until configured."
+      );
+    }
+    // Development-only fallback to allow local testing without explicit .env configuration
+    return "development_session_secret_for_local_testing_only_32_bytes";
+  }
+  if (secret.length < 32 && process.env.NODE_ENV === "production") {
+    throw new Error("FATAL: SESSION_SECRET must be at least 32 characters in production.");
+  }
+  return secret;
+}
 
 function signPayload(payload: string): string {
-  return crypto.createHmac("sha256", SESSION_SECRET).update(payload).digest("base64url");
+  return crypto.createHmac("sha256", getSessionSecret()).update(payload).digest("base64url");
 }
 
 function encodeSession(session: StaffSession): string {
