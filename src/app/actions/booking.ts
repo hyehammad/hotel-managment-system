@@ -4,6 +4,12 @@ import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
 import { addNotification } from "@/lib/events";
 import { canonicalizePhone } from "@/lib/phone";
+import {
+  validatePersonName,
+  validatePhoneNumber,
+  validateEmail,
+  sanitizeFreeText,
+} from "@/lib/validation";
 
 export interface BookingInput {
   roomTypeId: number;
@@ -117,9 +123,57 @@ export async function submitGuestBooking(input: BookingInput): Promise<BookingRe
       return { success: false, message: "Check-out date must be strictly after check-in date." };
     }
 
-    if (!firstName || !lastName || !phone) {
-      return { success: false, message: "First name, last name, and phone number are required." };
+    // Validate Person Names
+    const fnVal = validatePersonName(firstName, "First name", 50);
+    if (!fnVal.isValid) {
+      return { success: false, message: fnVal.error };
     }
+    const cleanFirstName = fnVal.sanitized;
+
+    const lnVal = validatePersonName(lastName, "Last name", 50);
+    if (!lnVal.isValid) {
+      return { success: false, message: lnVal.error };
+    }
+    const cleanLastName = lnVal.sanitized;
+
+    // Validate Phone Number
+    const phoneVal = validatePhoneNumber(phone, "Phone number", true);
+    if (!phoneVal.isValid) {
+      return { success: false, message: phoneVal.error };
+    }
+    const canonicalGuestPhone = phoneVal.canonical;
+
+    // Validate Email Address (optional)
+    let cleanEmail: string | null = null;
+    if (email && String(email).trim().length > 0) {
+      const emailVal = validateEmail(email, "Email address", false);
+      if (!emailVal.isValid) {
+        return { success: false, message: emailVal.error };
+      }
+      cleanEmail = emailVal.sanitized;
+    }
+
+    // Validate Cardholder Name (if online_card and provided)
+    if (paymentOption === "online_card" && cardDetails?.cardholderName && String(cardDetails.cardholderName).trim().length > 0) {
+      const chVal = validatePersonName(cardDetails.cardholderName, "Cardholder name", 100);
+      if (!chVal.isValid) {
+        return { success: false, message: chVal.error };
+      }
+    }
+
+    // Sanitize Special Requests
+    const specVal = sanitizeFreeText(specialRequests, 500, "Special requests");
+    if (!specVal.isValid) {
+      return { success: false, message: specVal.error };
+    }
+    const cleanSpecialRequests = specVal.sanitized || null;
+
+    // Validate room type & occupancy parameters
+    if (!roomTypeId || typeof roomTypeId !== "number" || roomTypeId <= 0) {
+      return { success: false, message: "A valid room type selection is required." };
+    }
+    const cleanAdults = Math.max(1, Math.min(10, parseInt(String(adults) || "1", 10) || 1));
+    const cleanChildren = Math.max(0, Math.min(10, parseInt(String(children) || "0", 10) || 0));
 
     const diffTime = checkOut.getTime() - checkIn.getTime();
     const totalNights = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
@@ -157,7 +211,6 @@ export async function submitGuestBooking(input: BookingInput): Promise<BookingRe
       const estimatedTotal = ratePerNight * totalNights;
 
       // Step B: Find or create guest record
-      const canonicalGuestPhone = canonicalizePhone(phone) || phone.trim();
       let guest = await tx.guests.findFirst({
         where: {
           OR: [
@@ -170,19 +223,19 @@ export async function submitGuestBooking(input: BookingInput): Promise<BookingRe
       if (!guest) {
         guest = await tx.guests.create({
           data: {
-            first_name: firstName.trim(),
-            last_name: lastName.trim(),
-            email: email ? email.trim() : null,
+            first_name: cleanFirstName,
+            last_name: cleanLastName,
+            email: cleanEmail,
             phone: canonicalGuestPhone,
             gender: gender || null,
             nationality: nationality || null,
           },
         });
-      } else if (email && !guest.email) {
+      } else if (cleanEmail && !guest.email) {
         // Update contact email if previously missing
         await tx.guests.update({
           where: { guest_id: guest.guest_id },
-          data: { email: email.trim() },
+          data: { email: cleanEmail },
         });
       }
 
@@ -194,10 +247,10 @@ export async function submitGuestBooking(input: BookingInput): Promise<BookingRe
           created_by: null,
           check_in_date: checkIn,
           check_out_date: checkOut,
-          adults: Math.max(1, adults),
-          children: Math.max(0, children || 0),
+          adults: cleanAdults,
+          children: cleanChildren,
           status: "pending",
-          special_requests: specialRequests ? specialRequests.trim() : null,
+          special_requests: cleanSpecialRequests,
         },
       });
 
@@ -224,7 +277,7 @@ export async function submitGuestBooking(input: BookingInput): Promise<BookingRe
         },
       });
 
-      // Step F: If paid online with card, create verified payment record
+      // Step F: If paid online with card, create simulated demo payment record (Academic Demo)
       if (isPaidOnline) {
         const last4 = cardDetails?.cardNumberLast4 || "4242";
         await tx.payments.create({
@@ -232,7 +285,7 @@ export async function submitGuestBooking(input: BookingInput): Promise<BookingRe
             reservation_id: reservation.reservation_id,
             amount: estimatedTotal,
             method: "online",
-            transaction_ref: `ONL-${Date.now()}-${last4}`,
+            transaction_ref: `SIM-ONL-${Date.now()}-${last4}`,
             processed_by: 1, // System Gateway
           },
         });
@@ -294,6 +347,13 @@ export async function submitGuestBooking(input: BookingInput): Promise<BookingRe
 // 3. Guest booking lookup by Reference ID and Email or Phone
 export async function lookupGuestBooking(referenceInput: string, contactInput: string) {
   try {
+    if (!referenceInput || typeof referenceInput !== "string" || referenceInput.trim().length === 0 || referenceInput.length > 50) {
+      return { success: false, message: "Invalid booking reference format. Example: RES-0001 or 1" };
+    }
+    if (!contactInput || typeof contactInput !== "string" || contactInput.trim().length === 0 || contactInput.length > 100) {
+      return { success: false, message: "Please provide a valid contact email or phone number." };
+    }
+
     const rawId = referenceInput.replace(/[^0-9]/g, "");
     const reservationId = parseInt(rawId, 10);
 
@@ -394,6 +454,7 @@ export async function lookupGuestBooking(referenceInput: string, contactInput: s
           paymentId: p.payment_id,
           amount: parseFloat(p.amount.toString()),
           method: p.method,
+          transactionRef: p.transaction_ref,
           paidAt: p.paid_at.toISOString(),
         })),
       },

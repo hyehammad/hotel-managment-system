@@ -233,28 +233,41 @@ export default function LookupClient({
             </div>
           </div>
 
-          {/* Payment History */}
+          {/* Payment History (Academic Demo Transparent Display) */}
           {bookingData.payments && bookingData.payments.length > 0 && (
             <div className="border-t border-slate-800 pt-5">
               <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-3 flex items-center gap-1.5">
                 <CreditCard className="w-4 h-4 text-amber-500" />
-                Recorded Payments
+                Recorded Payment Records (Academic Demo)
               </h4>
               <div className="space-y-2">
-                {bookingData.payments.map((p: any) => (
-                  <div
-                    key={p.paymentId}
-                    className="p-3 rounded-lg bg-slate-950 border border-slate-800 flex items-center justify-between text-xs"
-                  >
-                    <div>
-                      <span className="capitalize font-medium text-white">{p.method} Payment</span>
-                      <span className="text-[11px] text-slate-400 block">{new Date(p.paidAt).toLocaleDateString()}</span>
+                {bookingData.payments.map((p: any) => {
+                  const isOnlineDemo = p.method === "online" || (p.transactionRef && (p.transactionRef.startsWith("SIM-") || p.transactionRef.startsWith("ONL-")));
+                  return (
+                    <div
+                      key={p.paymentId}
+                      className="p-3 rounded-lg bg-slate-950 border border-slate-800 flex items-center justify-between text-xs"
+                    >
+                      <div>
+                        <span className="font-medium text-white">
+                          {isOnlineDemo ? "Simulated Online Payment (Demo)" : `${p.method.replace("_", " ")} Payment`}
+                        </span>
+                        <span className="text-[11px] text-slate-400 block">
+                          {new Date(p.paidAt).toLocaleDateString()}
+                          {p.transactionRef && ` • Ref: ${p.transactionRef}`}
+                          {isOnlineDemo && (
+                            <span className="text-amber-400/90 font-medium ml-1">
+                              (Academic Demo — No Real Card Charged)
+                            </span>
+                          )}
+                        </span>
+                      </div>
+                      <span className="font-bold text-emerald-400">
+                        PKR {p.amount.toLocaleString()}
+                      </span>
                     </div>
-                    <span className="font-bold text-emerald-400">
-                      PKR {p.amount.toLocaleString()}
-                    </span>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}

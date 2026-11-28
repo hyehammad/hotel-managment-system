@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { submitGuestBooking, checkRoomTypeAvailability, BookingResult } from "@/app/actions/booking";
+import { validatePersonName, validatePhoneNumber, validateEmail, sanitizePhoneInput } from "@/lib/validation";
 import Link from "next/link";
 import {
   Calendar,
@@ -64,12 +65,9 @@ export default function BookingClient({
   const [nationality, setNationality] = useState("Pakistani");
   const [specialRequests, setSpecialRequests] = useState("");
 
-  // Payment Options State
+  // Payment Options State (Academic Demo Mode)
   const [paymentOption, setPaymentOption] = useState<"pay_on_arrival" | "online_card">("pay_on_arrival");
   const [cardholderName, setCardholderName] = useState("");
-  const [cardNumber, setCardNumber] = useState("");
-  const [cardExpiry, setCardExpiry] = useState("");
-  const [cardCvv, setCardCvv] = useState("");
 
   // Availability & Submit States
   const [isPending, startTransition] = useTransition();
@@ -113,27 +111,36 @@ export default function BookingClient({
       return;
     }
 
-    if (!firstName || !lastName || !phone) {
-      setErrorMessage("Please complete all required fields (Name and Phone Number).");
+    const fnVal = validatePersonName(firstName, "First Name", 50);
+    if (!fnVal.isValid) {
+      setErrorMessage(fnVal.error || "Please enter a valid first name without numbers or symbols.");
       return;
     }
 
-    if (paymentOption === "online_card") {
-      const cleanCard = cardNumber.replace(/\s+/g, "");
-      if (!cardholderName.trim()) {
-        setErrorMessage("Please enter the name on the card.");
+    const lnVal = validatePersonName(lastName, "Last Name", 50);
+    if (!lnVal.isValid) {
+      setErrorMessage(lnVal.error || "Please enter a valid last name without numbers or symbols.");
+      return;
+    }
+
+    const phoneVal = validatePhoneNumber(phone, "Phone Number", true);
+    if (!phoneVal.isValid) {
+      setErrorMessage(phoneVal.error || "Phone number must contain digits only.");
+      return;
+    }
+
+    if (email && email.trim().length > 0) {
+      const emVal = validateEmail(email, "Email Address", false);
+      if (!emVal.isValid) {
+        setErrorMessage(emVal.error || "Please enter a valid email address.");
         return;
       }
-      if (cleanCard.length < 15) {
-        setErrorMessage("Please enter a valid card number (15 or 16 digits).");
-        return;
-      }
-      if (!cardExpiry.trim()) {
-        setErrorMessage("Please enter card expiry date (MM/YY).");
-        return;
-      }
-      if (cardCvv.trim().length < 3) {
-        setErrorMessage("Please enter a valid 3 or 4-digit CVV security code.");
+    }
+
+    if (paymentOption === "online_card" && cardholderName.trim().length > 0) {
+      const chVal = validatePersonName(cardholderName, "Demo Cardholder Name", 100);
+      if (!chVal.isValid) {
+        setErrorMessage(chVal.error || "Cardholder name must not contain numbers.");
         return;
       }
     }
@@ -156,8 +163,8 @@ export default function BookingClient({
         cardDetails:
           paymentOption === "online_card"
             ? {
-                cardholderName: cardholderName.trim(),
-                cardNumberLast4: cardNumber.replace(/\D/g, "").slice(-4) || "4242",
+                cardholderName: cardholderName.trim() || "DEMO GUEST",
+                cardNumberLast4: "4242",
               }
             : undefined,
       });
@@ -236,7 +243,7 @@ export default function BookingClient({
                 </span>
               </div>
               <div className="col-span-2 pt-2 border-t border-slate-800 flex items-center justify-between">
-                <span className="text-slate-400">Payment Arrangement</span>
+                <span className="text-slate-400">Payment Status</span>
                 <span
                   className={`inline-flex items-center gap-1 font-bold text-xs px-2.5 py-1 rounded-md ${
                     bookingResult.isPaid
@@ -245,14 +252,24 @@ export default function BookingClient({
                   }`}
                 >
                   <CheckCircle2 className="w-3.5 h-3.5" />
-                  {bookingResult.isPaid ? "PAID IN FULL (Card Verified)" : "PAYMENT DUE ON ARRIVAL"}
+                  {bookingResult.isPaid ? "DEMO PAYMENT RECORDED (Simulated — No Real Charge)" : "PAYMENT DUE ON ARRIVAL"}
                 </span>
               </div>
             </div>
           </div>
 
+          {/* Academic Demonstration Payment Notice */}
+          {bookingResult.isPaid && (
+            <div className="mt-4 p-3.5 rounded-xl bg-slate-950 border border-amber-500/30 text-xs text-slate-300">
+              <span className="font-semibold text-amber-300 block mb-0.5">
+                Academic Demonstration Notice
+              </span>
+              This reservation was recorded using simulated online payment. No financial charge was made to any card or bank account. A simulated payment record (Ref: {bookingResult.referenceCode}) has been established for demonstration purposes.
+            </div>
+          )}
+
           {/* 24-Hour Approval Policy Alert */}
-          <div className="mt-6 p-4 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-start gap-3 text-xs text-amber-300">
+          <div className="mt-4 p-4 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-start gap-3 text-xs text-amber-300">
             <Clock className="w-5 h-5 shrink-0 mt-0.5 text-amber-400" />
             <div>
               <span className="font-semibold block text-amber-200">
@@ -461,7 +478,12 @@ export default function BookingClient({
               <input
                 type="text"
                 value={firstName}
-                onChange={(e) => setFirstName(e.target.value)}
+                onChange={(e) => setFirstName(e.target.value.replace(/[0-9]/g, ""))}
+                onPaste={(e) => {
+                  e.preventDefault();
+                  const p = e.clipboardData.getData("text").replace(/[0-9]/g, "");
+                  setFirstName(p);
+                }}
                 placeholder="Ahmed"
                 required
                 className="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white focus:outline-none focus:border-amber-500 transition text-sm"
@@ -475,7 +497,12 @@ export default function BookingClient({
               <input
                 type="text"
                 value={lastName}
-                onChange={(e) => setLastName(e.target.value)}
+                onChange={(e) => setLastName(e.target.value.replace(/[0-9]/g, ""))}
+                onPaste={(e) => {
+                  e.preventDefault();
+                  const p = e.clipboardData.getData("text").replace(/[0-9]/g, "");
+                  setLastName(p);
+                }}
                 placeholder="Khan"
                 required
                 className="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white focus:outline-none focus:border-amber-500 transition text-sm"
@@ -490,12 +517,19 @@ export default function BookingClient({
               </label>
               <input
                 type="tel"
+                inputMode="tel"
                 value={phone}
-                onChange={(e) => setPhone(e.target.value)}
-                placeholder="+92 300 1234567"
+                onChange={(e) => setPhone(sanitizePhoneInput(e.target.value))}
+                onPaste={(e) => {
+                  e.preventDefault();
+                  const p = sanitizePhoneInput(e.clipboardData.getData("text"));
+                  setPhone(p);
+                }}
+                placeholder="03001234567 or +923001234567"
                 required
-                className="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white focus:outline-none focus:border-amber-500 transition text-sm"
+                className="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white focus:outline-none focus:border-amber-500 transition text-sm font-mono"
               />
+              <span className="text-[10px] text-slate-500 mt-1 block">11-digit national or '+' with international country code (e.g. +14155552671).</span>
             </div>
 
             <div>
@@ -596,11 +630,11 @@ export default function BookingClient({
               </span>
             </label>
 
-            {/* Pay Online Now Option */}
+            {/* Pay Online Now Option (Academic Demo) */}
             <label
               className={`p-4 rounded-xl border transition cursor-pointer flex flex-col justify-between gap-3 ${
                 paymentOption === "online_card"
-                  ? "bg-emerald-500/10 border-emerald-500/50 ring-1 ring-emerald-500/40"
+                  ? "bg-amber-500/10 border-amber-500/50 ring-1 ring-amber-500/40"
                   : "bg-slate-950/60 border-slate-800 hover:border-slate-700"
               }`}
             >
@@ -611,94 +645,66 @@ export default function BookingClient({
                   value="online_card"
                   checked={paymentOption === "online_card"}
                   onChange={() => setPaymentOption("online_card")}
-                  className="mt-1 text-emerald-500 focus:ring-emerald-500 cursor-pointer"
+                  className="mt-1 text-amber-500 focus:ring-amber-500 cursor-pointer"
                 />
                 <div>
-                  <div className="text-sm font-semibold text-white">Pay Online (Card)</div>
+                  <div className="text-sm font-semibold text-white">Simulated Card Payment (Academic Demo Only)</div>
                   <div className="text-xs text-slate-400 mt-1">
-                    Immediate card payment authorization. Room is verified and confirmed as fully Paid.
+                    Simulates instant room payment confirmation for demonstration purposes. No real card authorization or money transfer occurs.
                   </div>
                 </div>
               </div>
-              <span className="text-[10px] uppercase font-bold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20 w-fit">
-                Verified &amp; Paid
+              <span className="text-[10px] uppercase font-bold text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded-full border border-amber-500/20 w-fit">
+                Simulated Demo Payment
               </span>
             </label>
           </div>
 
-          {/* Card Input Drawer */}
+          {/* Card Input Drawer (Academic Demo — No CVV/Expiry Collected) */}
           {paymentOption === "online_card" && (
-            <div className="mt-4 p-5 rounded-xl bg-slate-950 border border-emerald-500/30 space-y-4">
+            <div className="mt-4 p-5 rounded-xl bg-slate-950 border border-amber-500/30 space-y-4">
               <div className="flex items-center justify-between border-b border-slate-800/80 pb-2">
-                <span className="text-xs font-semibold text-white flex items-center gap-1.5">
-                  <Lock className="w-3.5 h-3.5 text-emerald-400" />
-                  Secure Card Payment Processing
+                <span className="text-xs font-semibold text-amber-300 flex items-center gap-1.5">
+                  <AlertCircle className="w-3.5 h-3.5 text-amber-400" />
+                  Simulated Card Payment — Demo Mode
                 </span>
-                <span className="text-[11px] text-slate-400">Visa / Mastercard / UnionPay</span>
+                <span className="text-[11px] text-amber-400/80 font-mono">Academic Demonstration</span>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs text-amber-200">
+                <strong>Academic Demo Notice:</strong> This system is an educational demonstration. Do NOT enter real credit card numbers or banking credentials. No payment gateway is connected, and no card authorization or money transfer occurs. CVV and expiry dates are not collected.
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="sm:col-span-2">
                   <label className="text-xs font-medium text-slate-400 block mb-1">
-                    Cardholder Full Name <span className="text-emerald-400">*</span>
+                    Demo Cardholder Name <span className="text-slate-500">(Optional for demo)</span>
                   </label>
                   <input
                     type="text"
                     value={cardholderName}
-                    onChange={(e) => setCardholderName(e.target.value)}
-                    placeholder="e.g. AHMED KHAN"
-                    className="w-full px-3.5 py-2 rounded-xl bg-slate-900 border border-slate-800 text-white focus:outline-none focus:border-emerald-500 text-xs uppercase"
+                    onChange={(e) => setCardholderName(e.target.value.replace(/[0-9]/g, ""))}
+                    onPaste={(e) => {
+                      e.preventDefault();
+                      const paste = e.clipboardData.getData("text").replace(/[0-9]/g, "");
+                      setCardholderName(paste);
+                    }}
+                    placeholder="e.g. DEMO GUEST"
+                    className="w-full px-3.5 py-2 rounded-xl bg-slate-900 border border-slate-800 text-white focus:outline-none focus:border-amber-500 text-xs uppercase"
                   />
                 </div>
 
                 <div className="sm:col-span-2">
-                  <label className="text-xs font-medium text-slate-400 block mb-1">
-                    Card Number <span className="text-emerald-400">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    maxLength={19}
-                    value={cardNumber}
-                    onChange={(e) => {
-                      const v = e.target.value.replace(/\D/g, "").slice(0, 16);
-                      const formatted = v.replace(/(\d{4})/g, "$1 ").trim();
-                      setCardNumber(formatted);
-                    }}
-                    placeholder="4242 4242 4242 4242"
-                    className="w-full px-3.5 py-2 rounded-xl bg-slate-900 border border-slate-800 text-white focus:outline-none focus:border-emerald-500 text-xs font-mono"
-                  />
-                </div>
-
-                <div>
-                  <label className="text-xs font-medium text-slate-400 block mb-1">
-                    Expiry (MM/YY) <span className="text-emerald-400">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    maxLength={5}
-                    value={cardExpiry}
-                    onChange={(e) => {
-                      let v = e.target.value.replace(/\D/g, "").slice(0, 4);
-                      if (v.length > 2) v = `${v.slice(0, 2)}/${v.slice(2)}`;
-                      setCardExpiry(v);
-                    }}
-                    placeholder="12/28"
-                    className="w-full px-3.5 py-2 rounded-xl bg-slate-900 border border-slate-800 text-white focus:outline-none focus:border-emerald-500 text-xs font-mono"
-                  />
-                </div>
-
-                <div>
-                  <label className="text-xs font-medium text-slate-400 block mb-1">
-                    CVV / CVC <span className="text-emerald-400">*</span>
-                  </label>
-                  <input
-                    type="password"
-                    maxLength={4}
-                    value={cardCvv}
-                    onChange={(e) => setCardCvv(e.target.value.replace(/\D/g, "").slice(0, 4))}
-                    placeholder="•••"
-                    className="w-full px-3.5 py-2 rounded-xl bg-slate-900 border border-slate-800 text-white focus:outline-none focus:border-emerald-500 text-xs font-mono"
-                  />
+                  <div className="p-3.5 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-between">
+                    <div className="flex items-center gap-2.5">
+                      <CreditCard className="w-4 h-4 text-amber-400" />
+                      <span className="text-xs text-slate-300">Simulated Demo Card:</span>
+                    </div>
+                    <span className="font-mono font-bold text-amber-400 text-xs tracking-wider">•••• •••• •••• 4242</span>
+                  </div>
+                  <p className="text-[11px] text-slate-400 mt-1">
+                    This is a simulated payment for academic demonstration only. No card details are collected and no real payment is processed.
+                  </p>
                 </div>
               </div>
             </div>

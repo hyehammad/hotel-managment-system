@@ -10,6 +10,12 @@ import {
   recordReservationPayment,
 } from "@/app/actions/staff";
 import {
+  validatePersonName,
+  validatePhoneNumber,
+  validateEmail,
+  sanitizePhoneInput,
+} from "@/lib/validation";
+import {
   CalendarCheck,
   Clock,
   CheckCircle,
@@ -499,6 +505,29 @@ export default function ReservationsClient({
     if (!walkInRoomId) {
       setActionMessage({ type: "error", text: "Please select an available room for the walk-in guest." });
       return;
+    }
+
+    const fnCheck = validatePersonName(walkInFirstName, "Guest First Name", 50);
+    if (!fnCheck.isValid) {
+      setActionMessage({ type: "error", text: fnCheck.error || "Invalid first name." });
+      return;
+    }
+    const lnCheck = validatePersonName(walkInLastName, "Guest Last Name", 50);
+    if (!lnCheck.isValid) {
+      setActionMessage({ type: "error", text: lnCheck.error || "Invalid last name." });
+      return;
+    }
+    const phoneCheck = validatePhoneNumber(walkInPhone, "Guest Phone Number", true);
+    if (!phoneCheck.isValid) {
+      setActionMessage({ type: "error", text: phoneCheck.error || "Invalid phone number." });
+      return;
+    }
+    if (walkInEmail && walkInEmail.trim()) {
+      const emailCheck = validateEmail(walkInEmail, "Guest Email Address", false);
+      if (!emailCheck.isValid) {
+        setActionMessage({ type: "error", text: emailCheck.error || "Invalid email address." });
+        return;
+      }
     }
 
     const formData = new FormData();
@@ -1343,6 +1372,11 @@ export default function ReservationsClient({
                       <span className="font-mono">PKR {selectedResForDetail.credit_balance!.toLocaleString()} (Excess Guest Credit / Unapplied Balance)</span>
                     </div>
                   )}
+                  {selectedResForDetail.source === "online" && (
+                    <div className="col-span-full p-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-[11px] text-amber-300">
+                      <strong>Payment Note (Academic Demo):</strong> Online booking payment was recorded in simulation mode. No real card funds were collected or settled.
+                    </div>
+                  )}
                   <div className="col-span-full">
                     <span className="text-slate-400">Special Requests:</span>{" "}
                     <span className="text-slate-300 italic">
@@ -1506,9 +1540,9 @@ export default function ReservationsClient({
                         onChange={(e) => setCheckoutPaymentMethod(e.target.value as any)}
                         className="w-full px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs text-white"
                       >
-                        <option value="cash">Cash</option>
-                        <option value="card">Credit/Debit Card (POS)</option>
-                        <option value="bank_transfer">Bank Transfer</option>
+                        <option value="cash">Cash (Front Desk)</option>
+                        <option value="card">Credit/Debit Card (Front Desk POS Demo)</option>
+                        <option value="bank_transfer">Bank Transfer (Demo)</option>
                       </select>
                     </div>
                     <div>
@@ -1608,9 +1642,9 @@ export default function ReservationsClient({
                   onChange={(e) => setPaymentMethod(e.target.value as any)}
                   className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white"
                 >
-                  <option value="cash">Cash</option>
-                  <option value="card">Credit/Debit Card (Front Desk POS)</option>
-                  <option value="bank_transfer">Bank Transfer</option>
+                  <option value="cash">Cash (Front Desk)</option>
+                  <option value="card">Credit/Debit Card (Front Desk POS Demo)</option>
+                  <option value="bank_transfer">Bank Transfer (Demo)</option>
                 </select>
               </div>
 
@@ -1729,7 +1763,12 @@ export default function ReservationsClient({
                     type="text"
                     required
                     value={walkInFirstName}
-                    onChange={(e) => setWalkInFirstName(e.target.value)}
+                    onChange={(e) => setWalkInFirstName(e.target.value.replace(/[\d\p{N}]/gu, ""))}
+                    onPaste={(e) => {
+                      e.preventDefault();
+                      const text = e.clipboardData.getData("text").replace(/[\d\p{N}]/gu, "");
+                      setWalkInFirstName((prev) => (prev + text).slice(0, 50));
+                    }}
                     placeholder="Guest First Name"
                     className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white focus:outline-none focus:border-amber-500"
                   />
@@ -1742,7 +1781,12 @@ export default function ReservationsClient({
                     type="text"
                     required
                     value={walkInLastName}
-                    onChange={(e) => setWalkInLastName(e.target.value)}
+                    onChange={(e) => setWalkInLastName(e.target.value.replace(/[\d\p{N}]/gu, ""))}
+                    onPaste={(e) => {
+                      e.preventDefault();
+                      const text = e.clipboardData.getData("text").replace(/[\d\p{N}]/gu, "");
+                      setWalkInLastName((prev) => (prev + text).slice(0, 50));
+                    }}
                     placeholder="Guest Last Name"
                     className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white focus:outline-none focus:border-amber-500"
                   />
@@ -1756,11 +1800,17 @@ export default function ReservationsClient({
                   </label>
                   <input
                     type="tel"
+                    inputMode="tel"
                     required
                     value={walkInPhone}
-                    onChange={(e) => setWalkInPhone(e.target.value)}
-                    placeholder="+92 300 1234567"
-                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white focus:outline-none focus:border-amber-500"
+                    onChange={(e) => setWalkInPhone(sanitizePhoneInput(e.target.value))}
+                    onPaste={(e) => {
+                      e.preventDefault();
+                      const text = sanitizePhoneInput(e.clipboardData.getData("text"));
+                      setWalkInPhone(text);
+                    }}
+                    placeholder="03001234567 or +923001234567"
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white focus:outline-none focus:border-amber-500 font-mono"
                   />
                 </div>
                 <div>
@@ -1902,7 +1952,7 @@ export default function ReservationsClient({
                       className="w-4 h-4 rounded text-amber-500 focus:ring-0 bg-slate-900 border-slate-700"
                     />
                     <span className="text-xs font-semibold text-white">
-                      Record Payment Received at Front Desk
+                      Record Payment Received at Front Desk (Demo / Internal)
                     </span>
                   </label>
                   {walkInRecordPayment && (
@@ -1913,10 +1963,9 @@ export default function ReservationsClient({
                         onChange={(e) => setWalkInPaymentMethod(e.target.value)}
                         className="px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-700 text-xs text-white"
                       >
-                        <option value="cash">Cash</option>
-                        <option value="credit_card">Credit Card</option>
-                        <option value="debit_card">Debit Card</option>
-                        <option value="bank_transfer">Bank Transfer</option>
+                        <option value="cash">Cash (Front Desk)</option>
+                        <option value="card">Card (Front Desk POS Demo)</option>
+                        <option value="bank_transfer">Bank Transfer (Demo)</option>
                       </select>
                     </div>
                   )}

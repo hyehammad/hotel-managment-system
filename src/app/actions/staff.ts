@@ -25,6 +25,14 @@ import {
   markNotificationAsRead,
   markAllNotificationsAsRead,
 } from "@/lib/events";
+import {
+  validatePersonName,
+  validatePhoneNumber,
+  validateEmail,
+  validateStaffUsername,
+  validateStaffPassword,
+  sanitizeFreeText,
+} from "@/lib/validation";
 
 // ─── RBAC Helpers ────────────────────────────────────────────────────────────
 
@@ -662,8 +670,13 @@ export async function recordReservationPayment(
   try {
     const session = await requireRole(["Admin", "Manager", "Receptionist"]);
 
-    if (!amount || amount <= 0) {
-      return { success: false, error: "Payment amount must be greater than zero." };
+    if (!amount || typeof amount !== "number" || isNaN(amount) || amount <= 0 || amount > 10000000) {
+      return { success: false, error: "Payment amount must be a valid positive number under 10,000,000." };
+    }
+
+    const validMethods = ["cash", "card", "bank_transfer", "online", "cheque"];
+    if (!validMethods.includes(method)) {
+      return { success: false, error: `Invalid payment method. Allowed: ${validMethods.join(", ")}` };
     }
 
     const reservation = await prisma.reservations.findUnique({
@@ -685,7 +698,8 @@ export async function recordReservationPayment(
     const primaryRr = reservation.reservation_rooms[0];
     const primaryRate = primaryRr ? new Prisma.Decimal(primaryRr.rate_per_night) : new Prisma.Decimal(0);
     const decimalPaymentAmount = new Prisma.Decimal(amount);
-    const ref = transactionRef?.trim() || `PAY-${method.toUpperCase().slice(0, 4)}-${Date.now()}`;
+    const cleanRef = transactionRef ? sanitizeFreeText(transactionRef, 100, "Transaction reference").sanitized : "";
+    const ref = cleanRef || `PAY-${method.toUpperCase().slice(0, 4)}-${Date.now()}`;
 
     // Execute payment creation and atomic invoice recalculation in transaction with invoice row locking
     const summary = await prisma.$transaction(
@@ -761,17 +775,20 @@ export async function postIncidentalCharge(
   try {
     const session = await requireRole(["Admin", "Manager", "Receptionist"]);
 
-    const cleanDescription = (charge.description || "").trim();
-    if (!cleanDescription) {
-      return { success: false, error: "Charge description is required." };
+    const descVal = sanitizeFreeText(charge.description, 255, "Charge description");
+    if (!descVal.isValid || !descVal.sanitized) {
+      return { success: false, error: descVal.error || "Charge description is required." };
     }
+    const cleanDescription = descVal.sanitized;
 
     const unitPrice = charge.amount;
-    if (typeof unitPrice !== "number" || isNaN(unitPrice) || unitPrice <= 0) {
-      return { success: false, error: "Charge amount must be a positive number." };
+    if (typeof unitPrice !== "number" || isNaN(unitPrice) || unitPrice <= 0 || unitPrice > 10000000) {
+      return { success: false, error: "Charge amount must be a positive number under 10,000,000." };
     }
 
-    const qty = charge.quantity && charge.quantity > 0 ? Math.floor(charge.quantity) : 1;
+    const validItemTypes = ["service", "penalty", "other", "room"];
+    const itemType = charge.itemType && validItemTypes.includes(charge.itemType) ? charge.itemType : "service";
+    const qty = charge.quantity && typeof charge.quantity === "number" && charge.quantity > 0 ? Math.min(100, Math.floor(charge.quantity)) : 1;
     const decimalUnitPrice = new Prisma.Decimal(unitPrice);
     const decimalChargeTotal = decimalUnitPrice.times(qty);
 
@@ -896,13 +913,19 @@ export async function cancelReservation(reservationId: number, reason: string) {
       };
     }
 
+    const reasonVal = sanitizeFreeText(reason, 500, "Cancellation reason");
+    if (!reasonVal.isValid) {
+      return { success: false, error: reasonVal.error };
+    }
+    const cleanReason = reasonVal.sanitized || "Cancelled by hotel staff";
+
     await prisma.$transaction(
       async (tx) => {
         await tx.reservations.update({
           where: { reservation_id: reservationId },
           data: {
             status: "cancelled",
-            cancel_reason: reason || "Cancelled by hotel staff",
+            cancel_reason: cleanReason,
           },
         });
 
@@ -2014,34 +2037,68 @@ export async function getStaffMembers() {
 export async function createStaffAccount(formData: FormData) {
   const session = await requireRole(["Admin"]);
 
-  const username = formData.get("username")?.toString().trim();
+  const username = formData.get("username")?.toString();
   const password = formData.get("password")?.toString();
-  const firstName = formData.get("firstName")?.toString().trim();
-  const lastName = formData.get("lastName")?.toString().trim();
+  const firstName = formData.get("firstName")?.toString();
+  const lastName = formData.get("lastName")?.toString();
   const roleId = parseInt(formData.get("roleId")?.toString() || "0", 10);
-  const email = formData.get("email")?.toString().trim() || null;
-  const phone = formData.get("phone")?.toString().trim() || null;
+  const email = formData.get("email")?.toString();
+  const phone = formData.get("phone")?.toString();
 
   if (!username || !password || !firstName || !lastName || !roleId) {
     return { success: false, error: "Please provide all required fields." };
   }
 
-  const existing = await prisma.staff.findUnique({ where: { username } });
+  // Validate Person Names
+  const fnVal = validatePersonName(firstName, "First name", 50);
+  if (!fnVal.isValid) return { success: false, error: fnVal.error };
+  const cleanFirstName = fnVal.sanitized;
+
+  const lnVal = validatePersonName(lastName, "Last name", 50);
+  if (!lnVal.isValid) return { success: false, error: lnVal.error };
+  const cleanLastName = lnVal.sanitized;
+
+  // Validate Username format
+  const userVal = validateStaffUsername(username);
+  if (!userVal.isValid) return { success: false, error: userVal.error };
+  const cleanUsername = userVal.sanitized;
+
+  // Validate Password strength
+  const passVal = validateStaffPassword(password);
+  if (!passVal.isValid) return { success: false, error: passVal.error };
+
+  // Validate Phone (optional)
+  let canonicalStaffPhone: string | null = null;
+  if (phone && phone.trim().length > 0) {
+    const pVal = validatePhoneNumber(phone, "Staff phone number", false);
+    if (!pVal.isValid) return { success: false, error: pVal.error };
+    canonicalStaffPhone = pVal.canonical;
+  }
+
+  // Validate Email (optional)
+  let cleanStaffEmail: string | null = null;
+  if (email && email.trim().length > 0) {
+    const emVal = validateEmail(email, "Staff email address", false);
+    if (!emVal.isValid) return { success: false, error: emVal.error };
+    cleanStaffEmail = emVal.sanitized;
+  }
+
+  const existing = await prisma.staff.findUnique({ where: { username: cleanUsername } });
   if (existing) {
-    return { success: false, error: `Username '${username}' is already in use.` };
+    return { success: false, error: `Username '${cleanUsername}' is already in use.` };
   }
 
   const passwordHash = await argon2.hash(password, { type: argon2.argon2id });
 
   const newStaff = await prisma.staff.create({
     data: {
-      username,
+      username: cleanUsername,
       password_hash: passwordHash,
-      first_name: firstName,
-      last_name: lastName,
+      first_name: cleanFirstName,
+      last_name: cleanLastName,
       role_id: roleId,
-      email,
-      phone,
+      email: cleanStaffEmail,
+      phone: canonicalStaffPhone,
       is_active: true,
       hire_date: new Date(),
     },
@@ -2662,6 +2719,37 @@ export async function createWalkInReservation(formData: FormData) {
       return { success: false, error: "All required guest, room, and date fields must be filled." };
     }
 
+    // Validate Person Names
+    const fnVal = validatePersonName(firstName, "First name", 50);
+    if (!fnVal.isValid) return { success: false, error: fnVal.error };
+    const cleanFirstName = fnVal.sanitized;
+
+    const lnVal = validatePersonName(lastName, "Last name", 50);
+    if (!lnVal.isValid) return { success: false, error: lnVal.error };
+    const cleanLastName = lnVal.sanitized;
+
+    // Validate Phone Number
+    const phoneVal = validatePhoneNumber(phone, "Phone number", true);
+    if (!phoneVal.isValid) return { success: false, error: phoneVal.error };
+    const canonicalGuestPhone = phoneVal.canonical;
+
+    // Validate Email Address
+    let cleanEmail: string | null = null;
+    if (email && String(email).trim().length > 0) {
+      const emVal = validateEmail(email, "Email address", false);
+      if (!emVal.isValid) return { success: false, error: emVal.error };
+      cleanEmail = emVal.sanitized;
+    }
+
+    // Sanitize special requests
+    const specVal = sanitizeFreeText(specialRequests, 500, "Special requests");
+    if (!specVal.isValid) return { success: false, error: specVal.error };
+    const cleanSpecialRequests = specVal.sanitized || null;
+
+    // Validate occupancy bounds
+    const cleanAdults = Math.max(1, Math.min(10, adults || 1));
+    const cleanChildren = Math.max(0, Math.min(10, children || 0));
+
     const checkIn = new Date(checkInDate);
     const checkOut = new Date(checkOutDate);
 
@@ -2701,14 +2789,21 @@ export async function createWalkInReservation(formData: FormData) {
     }
 
     // 3. Upsert guest
-    let guest = await prisma.guests.findFirst({ where: { phone } });
+    let guest = await prisma.guests.findFirst({
+      where: {
+        OR: [
+          { phone: canonicalGuestPhone },
+          { phone: phone.trim() },
+        ],
+      },
+    });
     if (!guest) {
       guest = await prisma.guests.create({
         data: {
-          first_name: firstName,
-          last_name: lastName,
-          phone,
-          email,
+          first_name: cleanFirstName,
+          last_name: cleanLastName,
+          phone: canonicalGuestPhone,
+          email: cleanEmail,
         },
       });
     }
@@ -2727,10 +2822,10 @@ export async function createWalkInReservation(formData: FormData) {
             source: "walk_in",
             check_in_date: checkIn,
             check_out_date: checkOut,
-            adults: Math.max(1, adults),
-            children: Math.max(0, children),
+            adults: cleanAdults,
+            children: cleanChildren,
             status: directCheckIn ? "checked_in" : "confirmed",
-            special_requests: specialRequests,
+            special_requests: cleanSpecialRequests,
           },
         });
 

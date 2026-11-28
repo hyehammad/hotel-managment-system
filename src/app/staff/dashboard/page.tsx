@@ -356,6 +356,10 @@ export default async function DashboardOverviewPage({
                 ))}
               </tbody>
             </table>
+            <div className="p-3 text-[11px] text-slate-500 border-t border-slate-800/60 flex items-center justify-between">
+              <span>Payment status reflects internal ledger records (Academic Demo — No real card funds settled).</span>
+              <span className="font-mono">Grand Horizon HMS Demo</span>
+            </div>
           </div>
         )}
       </div>

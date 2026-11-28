@@ -8,6 +8,14 @@ import {
   adminResetStaffPassword,
 } from "@/app/actions/staff";
 import {
+  validatePersonName,
+  validatePhoneNumber,
+  validateEmail,
+  validateStaffUsername,
+  validateStaffPassword,
+  sanitizePhoneInput,
+} from "@/lib/validation";
+import {
   Users,
   Shield,
   ShieldAlert,
@@ -65,6 +73,12 @@ export default function StaffClient({
 
   // Create Staff Modal
   const [createModalOpen, setCreateModalOpen] = useState(false);
+  const [newFirstName, setNewFirstName] = useState("");
+  const [newLastName, setNewLastName] = useState("");
+  const [newUsername, setNewUsername] = useState("");
+  const [createPassword, setCreatePassword] = useState("");
+  const [newEmail, setNewEmail] = useState("");
+  const [newPhone, setNewPhone] = useState("");
 
   // Reset Password Modal
   const [resetModalStaff, setResetModalStaff] = useState<StaffItem | null>(null);
@@ -165,6 +179,48 @@ export default function StaffClient({
 
   const handleCreateStaff = (formData: FormData) => {
     setMessage(null);
+    const fn = (formData.get("firstName") as string) || newFirstName;
+    const ln = (formData.get("lastName") as string) || newLastName;
+    const un = (formData.get("username") as string) || newUsername;
+    const pwd = (formData.get("password") as string) || createPassword;
+    const email = (formData.get("email") as string) || newEmail;
+    const phone = (formData.get("phone") as string) || newPhone;
+
+    const fnCheck = validatePersonName(fn, "First name", 50);
+    if (!fnCheck.isValid) {
+      setMessage({ type: "error", text: fnCheck.error || "Invalid first name." });
+      return;
+    }
+    const lnCheck = validatePersonName(ln, "Last name", 50);
+    if (!lnCheck.isValid) {
+      setMessage({ type: "error", text: lnCheck.error || "Invalid last name." });
+      return;
+    }
+    const unCheck = validateStaffUsername(un);
+    if (!unCheck.isValid) {
+      setMessage({ type: "error", text: unCheck.error || "Invalid username." });
+      return;
+    }
+    const pwdCheck = validateStaffPassword(pwd);
+    if (!pwdCheck.isValid) {
+      setMessage({ type: "error", text: pwdCheck.error || "Invalid password." });
+      return;
+    }
+    if (phone && phone.trim()) {
+      const phoneCheck = validatePhoneNumber(phone, "Phone number", false);
+      if (!phoneCheck.isValid) {
+        setMessage({ type: "error", text: phoneCheck.error || "Invalid phone number." });
+        return;
+      }
+    }
+    if (email && email.trim()) {
+      const emailCheck = validateEmail(email, "Email address", false);
+      if (!emailCheck.isValid) {
+        setMessage({ type: "error", text: emailCheck.error || "Invalid email address." });
+        return;
+      }
+    }
+
     startTransition(async () => {
       const res = await createStaffAccount(formData);
       if (res.success) {
@@ -173,6 +229,12 @@ export default function StaffClient({
           text: "New staff account created successfully with Argon2id credentials.",
         });
         setCreateModalOpen(false);
+        setNewFirstName("");
+        setNewLastName("");
+        setNewUsername("");
+        setCreatePassword("");
+        setNewEmail("");
+        setNewPhone("");
       } else {
         setMessage({ type: "error", text: res.error || "Failed to create staff account." });
       }
@@ -386,6 +448,13 @@ export default function StaffClient({
                     name="firstName"
                     type="text"
                     required
+                    value={newFirstName}
+                    onChange={(e) => setNewFirstName(e.target.value.replace(/[\d\p{N}]/gu, ""))}
+                    onPaste={(e) => {
+                      e.preventDefault();
+                      const text = e.clipboardData.getData("text").replace(/[\d\p{N}]/gu, "");
+                      setNewFirstName((prev) => (prev + text).slice(0, 50));
+                    }}
                     placeholder="e.g. Tariq"
                     className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white focus:outline-none focus:border-amber-500"
                   />
@@ -398,6 +467,13 @@ export default function StaffClient({
                     name="lastName"
                     type="text"
                     required
+                    value={newLastName}
+                    onChange={(e) => setNewLastName(e.target.value.replace(/[\d\p{N}]/gu, ""))}
+                    onPaste={(e) => {
+                      e.preventDefault();
+                      const text = e.clipboardData.getData("text").replace(/[\d\p{N}]/gu, "");
+                      setNewLastName((prev) => (prev + text).slice(0, 50));
+                    }}
                     placeholder="e.g. Khan"
                     className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white focus:outline-none focus:border-amber-500"
                   />
@@ -413,6 +489,8 @@ export default function StaffClient({
                     name="username"
                     type="text"
                     required
+                    value={newUsername}
+                    onChange={(e) => setNewUsername(e.target.value.toLowerCase().replace(/[^a-z0-9_\-\.]/g, "").slice(0, 30))}
                     placeholder="e.g. tkhan"
                     className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white focus:outline-none focus:border-amber-500 font-mono"
                   />
@@ -425,6 +503,8 @@ export default function StaffClient({
                     name="password"
                     type="password"
                     required
+                    value={createPassword}
+                    onChange={(e) => setCreatePassword(e.target.value)}
                     placeholder="••••••••••••"
                     className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white focus:outline-none focus:border-amber-500"
                   />
@@ -456,6 +536,8 @@ export default function StaffClient({
                   <input
                     name="email"
                     type="email"
+                    value={newEmail}
+                    onChange={(e) => setNewEmail(e.target.value)}
                     placeholder="tkhan@hotel.com"
                     className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white focus:outline-none focus:border-amber-500"
                   />
@@ -467,8 +549,16 @@ export default function StaffClient({
                   <input
                     name="phone"
                     type="tel"
-                    placeholder="+923001234567"
-                    className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white focus:outline-none focus:border-amber-500"
+                    inputMode="tel"
+                    value={newPhone}
+                    onChange={(e) => setNewPhone(sanitizePhoneInput(e.target.value))}
+                    onPaste={(e) => {
+                      e.preventDefault();
+                      const text = sanitizePhoneInput(e.clipboardData.getData("text"));
+                      setNewPhone(text);
+                    }}
+                    placeholder="03001234567 or +923001234567"
+                    className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white focus:outline-none focus:border-amber-500 font-mono"
                   />
                 </div>
               </div>
